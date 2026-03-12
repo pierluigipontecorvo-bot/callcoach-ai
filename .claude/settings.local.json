@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python services/campaign_parser.py)",
+      "Bash(python3 services/campaign_parser.py)",
+      "Bash(python3 -m uvicorn --version)"
+    ]
+  }
+}

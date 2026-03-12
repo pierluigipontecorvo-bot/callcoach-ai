@@ -1,0 +1,54 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Database
+    database_url: str
+    supabase_service_key: str = ""
+
+    # AI
+    anthropic_api_key: str
+
+    # Sidial CRM
+    sidial_api_url: str = "https://effoncall.sidial.cloud/api.php"
+    sidial_api_token: str
+
+    # Acuity Account 1
+    acuity_account1_user_id: str
+    acuity_account1_api_key: str
+    acuity_account1_webhook_secret: Optional[str] = None
+
+    # Acuity Account 2
+    acuity_account2_user_id: str
+    acuity_account2_api_key: str
+    acuity_account2_webhook_secret: Optional[str] = None
+
+    # Whether to verify Acuity webhook HMAC signatures
+    acuity_verify_webhook: bool = False
+
+    # Email Aruba
+    smtp_host: str = "smtps.aruba.it"
+    smtp_port: int = 465
+    smtp_user: str
+    smtp_password: str
+
+    # Security
+    secret_key: str
+    admin_password: str
+
+    # Whisper model size: tiny / base / small / medium / large
+    whisper_model_size: str = "small"
+
+    # Fallback email when no campaign recipients are configured
+    fallback_email: str = "pierluigi.pontecorvo@effoncall.it"
+
+
+settings = Settings()
