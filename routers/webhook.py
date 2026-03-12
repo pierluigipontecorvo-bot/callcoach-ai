@@ -2,6 +2,7 @@
 Acuity Scheduling webhook receiver + background analysis pipeline.
 """
 
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -246,7 +247,10 @@ async def acuity_webhook(
     if not check_webhook_signature(payload_bytes, signature, account_id):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    data = await request.json()
+    if not payload_bytes:
+        return {"status": "ok"}
+
+    data = json.loads(payload_bytes)
 
     logger.info(
         "Acuity webhook account=%d action=%s appointment_id=%s labels=%s",
