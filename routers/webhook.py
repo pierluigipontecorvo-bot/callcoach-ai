@@ -12,7 +12,7 @@ from services.acuity import check_webhook_signature, get_appointment, should_ana
 from services.ai_analysis import analyze_call
 from services.campaign_parser import parse_campaign_code
 from services.email_service import generate_html_report, send_analysis_report
-from services.sidial import find_and_download_recording
+from services.sidial import find_and_download_all_recordings
 from services.transcription import transcribe_audio
 from utils.helpers import parse_iso_datetime
 
@@ -121,14 +121,11 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     )
 
     phone = appointment_data.get("phone", "")
-    appointment_dt_str = appointment_data.get("datetime", "")
-    appointment_dt = parse_iso_datetime(appointment_dt_str)
 
-    # ── 2. Find & download recording ─────────────────────────────────────────
+    # ── 2. Find & download ALL recordings for this contact ────────────────────
     try:
-        sidial_call_id, audio_bytes = await find_and_download_recording(
+        recordings = await find_and_download_all_recordings(
             phone=phone,
-            appointment_datetime=appointment_dt_str,
             campaign_code=campaign_info.get("raw"),
         )
     except Exception as exc:
@@ -137,22 +134,31 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         await _save_error(appointment_id, msg, acuity_account)
         return
 
-    if not audio_bytes:
-        msg = "Recording not found on Sidial"
+    if not recordings:
+        msg = "Nessuna registrazione trovata su Sidial"
         logger.error("[%s] %s", appointment_id, msg)
         await _save_error(appointment_id, msg, acuity_account)
         return
 
-    # ── 3. Transcribe ─────────────────────────────────────────────────────────
-    try:
-        logger.info("[%s] Transcribing %d bytes …", appointment_id, len(audio_bytes))
-        transcript = await transcribe_audio(audio_bytes)
-        logger.info("[%s] Transcript: %d chars", appointment_id, len(transcript))
-    except Exception as exc:
-        msg = f"Whisper transcription failed: {exc}"
-        logger.error("[%s] %s", appointment_id, msg, exc_info=True)
-        await _save_error(appointment_id, msg, acuity_account)
-        return
+    logger.info("[%s] %d registrazioni trovate", appointment_id, len(recordings))
+
+    # ── 3. Transcribe all recordings and concatenate ───────────────────────────
+    transcript_parts = []
+    for idx, (call_id, audio_bytes) in enumerate(recordings, start=1):
+        try:
+            logger.info(
+                "[%s] Trascrizione chiamata %d/%d (call_id=%s, %d bytes) …",
+                appointment_id, idx, len(recordings), call_id, len(audio_bytes),
+            )
+            part = await transcribe_audio(audio_bytes)
+            transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n{part}")
+            logger.info("[%s] Chiamata %d: %d caratteri", appointment_id, idx, len(part))
+        except Exception as exc:
+            logger.error("[%s] Trascrizione fallita per call_id=%s: %s", appointment_id, call_id, exc)
+            transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n[trascrizione non disponibile]")
+
+    transcript = "\n\n".join(transcript_parts)
+    logger.info("[%s] Trascrizione totale: %d caratteri", appointment_id, len(transcript))
 
     # ── 4. Load campaign config ───────────────────────────────────────────────
     campaign_db = None

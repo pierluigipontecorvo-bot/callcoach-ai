@@ -78,26 +78,28 @@ async def get_api_docs() -> dict:
 
 # ── Call search ───────────────────────────────────────────────────────────────
 
-async def _search_calls(phone: str, date_str: str) -> list[dict]:
+async def _search_calls(phone: str, date_str: Optional[str] = None) -> list[dict]:
     """
-    Query Sidial for calls matching *phone* on *date_str* (YYYY-MM-DD).
+    Query Sidial for all calls matching *phone*.
+    If *date_str* (YYYY-MM-DD) is provided, filters by that date.
     Returns the raw list of call objects.
     """
-    params = {
+    params: dict = {
         "action": "calls",
         "phone": phone,
-        "date": date_str,
-        "limit": "50",
+        "limit": "500",
     }
+    if date_str:
+        params["date"] = date_str
+
     url = _BASE
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             resp = await client.get(url, params=params, headers=_HEADERS)
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, list):
                 return data
-            # Some APIs wrap results
             return data.get("calls", data.get("data", data.get("results", [])))
         except Exception as exc:
             logger.error("Sidial call search failed: %s", exc)
@@ -273,3 +275,54 @@ async def find_and_download_recording(
     except Exception as exc:
         logger.error("Sidial: download failed for call_id=%s: %s", call_id, exc)
         return call_id, None
+
+
+async def find_and_download_all_recordings(
+    phone: str,
+    campaign_code: Optional[str] = None,
+) -> list[Tuple[str, bytes]]:
+    """
+    Trova e scarica TUTTE le registrazioni per un numero di telefono,
+    senza filtro di data. Restituisce lista di (call_id, audio_bytes)
+    ordinata cronologicamente (dalla più vecchia alla più recente).
+    """
+    norm_phone = _normalize_phone(phone)
+    logger.info(
+        "Sidial: searching ALL recordings for phone=%s (normalised=%s) campaign=%s",
+        phone,
+        norm_phone,
+        campaign_code,
+    )
+
+    calls = await _search_calls(norm_phone)
+
+    if not calls:
+        logger.warning("Sidial: no calls found for phone=%s", norm_phone)
+        return []
+
+    # Ordina dalla più vecchia alla più recente
+    def _sort_key(c: dict):
+        dt = _parse_call_datetime(c)
+        return dt if dt else datetime.min.replace(tzinfo=timezone.utc)
+
+    calls_sorted = sorted(calls, key=_sort_key)
+    logger.info("Sidial: found %d calls for phone=%s", len(calls_sorted), norm_phone)
+
+    results: list[Tuple[str, bytes]] = []
+    for call in calls_sorted:
+        call_id = str(call.get("id") or call.get("call_id") or "")
+        if not call_id:
+            continue
+        recording_url = await _get_recording_url(call_id)
+        if not recording_url:
+            logger.warning("Sidial: no recording URL for call_id=%s — skipping", call_id)
+            continue
+        try:
+            audio_bytes = await download_recording(recording_url)
+            logger.info("Sidial: downloaded %d bytes for call_id=%s", len(audio_bytes), call_id)
+            results.append((call_id, audio_bytes))
+        except Exception as exc:
+            logger.error("Sidial: download failed for call_id=%s: %s", call_id, exc)
+
+    logger.info("Sidial: %d recordings downloaded for phone=%s", len(results), norm_phone)
+    return results

@@ -97,7 +97,7 @@ def should_analyze(payload: dict) -> bool:
     """
     Return True if the appointment has the 'PRESO' label (case-insensitive).
     """
-    labels = payload.get("labels", [])
+    labels = payload.get("labels") or []
     for label in labels:
         if label.get("name", "").lower().strip() in TRIGGER_LABELS:
             return True
