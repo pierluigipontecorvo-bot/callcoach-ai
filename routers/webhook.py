@@ -8,7 +8,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from services.acuity import check_webhook_signature, should_analyze
+from services.acuity import check_webhook_signature, get_appointment, should_analyze
 from services.ai_analysis import analyze_call
 from services.campaign_parser import parse_campaign_code
 from services.email_service import generate_html_report, send_analysis_report
@@ -264,21 +264,31 @@ async def acuity_webhook(
         if not data:
             return {"status": "ok"}
 
+    appointment_id = data.get("id") or data.get("appointmentID")
+    action = data.get("action")
+
     logger.info(
-        "Acuity webhook account=%d action=%s appointment_id=%s labels=%s",
+        "Acuity webhook account=%d action=%s appointment_id=%s",
         account_id,
-        data.get("action"),
-        data.get("id"),
-        data.get("labels"),
+        action,
+        appointment_id,
     )
 
-    if not should_analyze(data):
+    if not appointment_id:
+        return {"status": "skipped", "reason": "no appointment id"}
+
+    # Fetch full appointment details (includes labels) from Acuity API
+    full_appointment = await get_appointment(appointment_id, account_id)
+    if not full_appointment:
+        return {"status": "skipped", "reason": "could not fetch appointment"}
+
+    if not should_analyze(full_appointment):
         return {"status": "skipped", "reason": "label not in trigger set"}
 
     # Respond immediately with 200 — pipeline runs in background
     background_tasks.add_task(
         run_analysis_pipeline,
-        appointment_data=data,
+        appointment_data=full_appointment,
         acuity_account=account_id,
     )
 
