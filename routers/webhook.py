@@ -4,6 +4,7 @@ Acuity Scheduling webhook receiver + background analysis pipeline.
 
 import json
 import logging
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -250,7 +251,18 @@ async def acuity_webhook(
     if not payload_bytes:
         return {"status": "ok"}
 
-    data = json.loads(payload_bytes)
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            data = json.loads(payload_bytes)
+        except json.JSONDecodeError:
+            return {"status": "ok"}
+    else:
+        # Acuity sends form-encoded: action=changed&id=123&...
+        parsed = parse_qs(payload_bytes.decode("utf-8", errors="ignore"))
+        data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+        if not data:
+            return {"status": "ok"}
 
     logger.info(
         "Acuity webhook account=%d action=%s appointment_id=%s labels=%s",
