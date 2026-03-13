@@ -114,8 +114,8 @@ _OPERATOR_EMAIL_RE = re.compile(r"op\.\d+\.[^@]+@effoncall\.com", re.IGNORECASE)
 # Matches op.XX.*@* (any domain — e.g. Gmail) for extracting the operator number
 _ANY_OP_EMAIL_RE  = re.compile(r"op\.(\d+)\.[^@]+@", re.IGNORECASE)
 
-# OPR. field: value like "91-STEFANO C." or "12-MARIO R."
-_OPR_VALUE_RE = re.compile(r"^(\d+)-(.+)$")
+# OPR. field: value like "91-STEFANO C." or "91 - STEFANO C." or "12-MARIO R."
+_OPR_VALUE_RE = re.compile(r"^(\d+)\s*-\s*(.+)$")
 
 # Form field names that contain the operator identifier (case-insensitive, accent-stripped)
 _OPR_FIELD_KEYWORDS_U = ("OPR", "OPERATRICE", "OPERATORE")
@@ -145,23 +145,51 @@ def find_operator_email(appointment_data: dict) -> str:
     return _search(appointment_data)
 
 
+def _norm_fieldname(s: str) -> str:
+    """Uppercase + strip accents for reliable keyword matching."""
+    return re.sub(r"[ÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜ]", lambda m: "AEIOU"[
+        "aeiouaeiouaeiouaeiouaeiou".index(m.group().lower()) // 4
+    ] if m.group().lower() in "àáâãäåèéêëìíîïòóôõöùúûü" else m.group(), s.strip().upper())
+
+
+def _search_opr_in_list(items: list) -> str:
+    """Scan a list of {name, value} dicts for an OPR field."""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_name = item.get("name") or item.get("label") or ""
+        fn = _norm_fieldname(raw_name)
+        if any(kw in fn for kw in _OPR_FIELD_KEYWORDS_U):
+            v = (item.get("value") or "").strip()
+            if v:
+                return v
+    return ""
+
+
 def find_opr_field(appointment_data: dict) -> str:
     """
     Search Acuity form fields for an operator-name field and return its value
     (e.g. '91-STEFANO C.').
 
-    Matches field names containing: OPR, OPERATRICE, OPERATORE
-    (e.g. 'OPR.', 'NOME OPR', 'NOME OPERATRICE', 'NOME OPERATORE', 'Operatrice')
+    Searches both forms[].values[] and forms[].fields[], and also checks
+    top-level 'fields' / 'forms' at any nesting level.
     Returns empty string if not found.
     """
+    # Primary: forms[].values[] (standard Acuity structure)
     for form in (appointment_data.get("forms") or []):
-        for val in (form.get("values") or []):
-            # Uppercase + strip accents for reliable matching
-            fn = re.sub(r"[ÀÁÂÈÉÊÌÍÎÒÓÔÙÚÛ]", "A", (val.get("name") or "").strip().upper())
-            if any(kw in fn for kw in _OPR_FIELD_KEYWORDS_U):
-                v = (val.get("value") or "").strip()
-                if v:
-                    return v
+        # Acuity may use "values" or "fields" as the key
+        items = form.get("values") or form.get("fields") or []
+        found = _search_opr_in_list(items)
+        if found:
+            return found
+
+    # Fallback: top-level "fields" array (some Acuity response shapes)
+    top_fields = appointment_data.get("fields") or []
+    if top_fields:
+        found = _search_opr_in_list(top_fields)
+        if found:
+            return found
+
     return ""
 
 
@@ -254,7 +282,12 @@ def extract_ragione_sociale(appointment_data: dict) -> str:
 # ── In-memory cache for list_appointments (avoids re-fetching on every page nav) ─
 
 _APPTS_CACHE: dict = {}
-_APPTS_CACHE_TTL = 60  # seconds — refresh at most once per minute
+_APPTS_CACHE_TTL = 300  # seconds — 5 minutes
+
+
+def clear_appointments_cache() -> None:
+    """Invalidate all cached appointment lists (forces next call to hit Acuity API)."""
+    _APPTS_CACHE.clear()
 
 
 # ── REST API – list appointments ───────────────────────────────────────────────

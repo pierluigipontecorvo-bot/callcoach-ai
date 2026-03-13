@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set active_page = "appointments" %}
 
 {% block title %}Appuntamenti — CallCoach Admin{% endblock %}
 
@@ -7,250 +8,53 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
   <div>
     <h4 class="fw-bold mb-0">Appuntamenti da analizzare</h4>
-    <p class="text-muted small mb-0">
-      Ultimi 30 giorni + tutti i futuri —
-      <strong>{{ appointments | length }}</strong> appuntamenti
-    </p>
+    <p class="text-muted small mb-0" id="appt-subtitle">&nbsp;</p>
+  </div>
+  <button id="appt-refresh" onclick="loadAppts(true)"
+          class="btn btn-sm btn-outline-secondary" style="display:none; font-size:12px;">
+    ↺ Aggiorna
+  </button>
+</div>
+
+<div id="appt-container">
+  <div class="text-center py-5 text-muted">
+    <div class="spinner-border" role="status"
+         style="width:1.5rem; height:1.5rem; border-width:2px; color:var(--ec-slate);"></div>
+    <p class="mt-2 small mb-0">Caricamento appuntamenti Acuity…</p>
   </div>
 </div>
 
-{% if flash_ok %}
-<div class="alert alert-success alert-dismissible fade show" role="alert">
-  {{ flash_ok }}
-  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-</div>
-{% endif %}
-{% if flash_err %}
-<div class="alert alert-danger alert-dismissible fade show" role="alert">
-  {{ flash_err }}
-  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-</div>
-{% endif %}
-
-<style>
-  th.sortable {
-    cursor: pointer;
-    user-select: none;
-    white-space: nowrap;
-  }
-  th.sortable:hover { color: var(--ec-navy); }
-  th.sortable .sort-icon {
-    display: inline-block;
-    width: 12px;
-    font-size: 9px;
-    opacity: .35;
-    margin-left: 3px;
-    vertical-align: middle;
-  }
-  th.sortable.asc  .sort-icon { opacity: 1; }
-  th.sortable.desc .sort-icon { opacity: 1; }
-</style>
-
-{% if appointments %}
-<div class="card shadow-sm">
-  <div class="table-responsive">
-    <table id="apptTable" class="table table-hover mb-0 align-middle" style="font-size:13px;">
-      <thead>
-        <tr>
-          <th class="sortable" data-col="0" data-type="text">
-            Campagna<span class="sort-icon">⇅</span>
-          </th>
-          <th class="sortable" data-col="1" data-type="text">
-            Ragione Sociale<span class="sort-icon">⇅</span>
-          </th>
-          <th class="sortable" data-col="2" data-type="text">
-            Operatore<span class="sort-icon">⇅</span>
-          </th>
-          <th class="sortable" data-col="3" data-type="text">
-            Etichetta<span class="sort-icon">⇅</span>
-          </th>
-          <th title="Script · Parametri qualif. · Info cliente">
-            Config <span class="text-muted fw-normal" style="font-size:10px;">S·Q·I</span>
-          </th>
-          <th class="sortable" data-col="5" data-type="date">
-            Data Appuntamento<span class="sort-icon">⇅</span>
-          </th>
-          <th class="sortable" data-col="6" data-type="text">
-            Analisi<span class="sort-icon">⇅</span>
-          </th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for a in appointments %}
-        <tr>
-
-          {# Campagna #}
-          <td data-val="{{ a.campaign_code }}">
-            <code style="font-size:12px;">{{ a.campaign_code }}</code>
-            {% if not a.campaign_cfg %}
-              {% if a.campaign_inactive %}
-                <span class="ms-1 text-secondary" title="Configurazione trovata ma inattiva — vai in Campagne e attivala">⊘</span>
-              {% else %}
-                <span class="ms-1 text-warning" title="Nessuna configurazione trovata per questa campagna">⚠</span>
-              {% endif %}
-            {% endif %}
-          </td>
-
-          {# Ragione Sociale #}
-          <td data-val="{{ a.ragione }}"
-              style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
-              title="{{ a.ragione }}">
-            {{ a.ragione }}
-          </td>
-
-          {# Operatore #}
-          <td data-val="{{ a.op_display }}" style="white-space:nowrap;">
-            <span style="font-family:'Space Grotesk',sans-serif; font-weight:600;">
-              {{ a.op_display }}
-            </span>
-          </td>
-
-          {# Etichetta #}
-          {# Mappa colori fissa (corrisponde ai colori visualizzati in Acuity) #}
-          {% set _LC = {
-            'ANNULLATO':  {'bg': '#f06292', 'fg': '#fff'},
-            'APP.TO KO':  {'bg': '#c62828', 'fg': '#fff'},
-            'APP.TO OK':  {'bg': '#2e7d32', 'fg': '#fff'},
-            'CONFERMATO': {'bg': '#42a5f5', 'fg': '#fff'},
-            'PRESO':      {'bg': '#f9a825', 'fg': '#333'},
-          } %}
-          <td data-val="{{ a.labels[0].name if a.labels else '' }}">
-            {% for lbl in a.labels %}
-              {% set _key = lbl.name | upper %}
-              {% set _style = _LC[_key] if _key in _LC else {'bg': '#6c757d', 'fg': '#fff'} %}
-              <span class="badge me-1"
-                style="font-size:10px;
-                       background-color:{{ _style.bg }};
-                       color:{{ _style.fg }};">
-                {{ lbl.name }}
-              </span>
-            {% else %}
-              <span class="text-muted">—</span>
-            {% endfor %}
-          </td>
-
-          {# Config indicators: Script · Qualif · Info #}
-          <td class="text-center" style="letter-spacing:2px;">
-            <span title="Script di vendita">
-              {% if a.campaign_cfg and a.campaign_cfg.script %}
-                <span class="dot-ok">●</span>
-              {% else %}
-                <span class="dot-miss">●</span>
-              {% endif %}
-            </span>
-            <span title="Parametri qualificazione">
-              {% if a.campaign_cfg and a.campaign_cfg.qualification_params %}
-                <span class="dot-ok">●</span>
-              {% else %}
-                <span class="dot-miss">●</span>
-              {% endif %}
-            </span>
-            <span title="Info cliente">
-              {% if a.campaign_cfg and a.campaign_cfg.client_info %}
-                <span class="dot-ok">●</span>
-              {% else %}
-                <span class="dot-miss">●</span>
-              {% endif %}
-            </span>
-          </td>
-
-          {# Data #}
-          <td data-val="{{ a.dt_display }}"
-              style="white-space:nowrap; font-variant-numeric:tabular-nums;">
-            {{ a.dt_display }}
-          </td>
-
-          {# Analisi #}
-          <td style="min-width:120px;"
-              data-val="{{ a.analysis.status if a.analysis else '' }}">
-            {% if a.analysis %}
-              {% if a.analysis.status == "completed" %}
-                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
-                   class="badge bg-success text-decoration-none" style="font-size:11px;">
-                  ✓ Completata
-                </a>
-              {% elif a.analysis.status == "error" %}
-                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
-                   class="badge bg-danger text-decoration-none" style="font-size:11px;">
-                  ✗ Errore
-                </a>
-              {% elif a.analysis.status == "processing" %}
-                <div style="font-size:10px; color:#888;">{{ a.analysis.step_message or 'In corso...' }} {{ a.analysis.progress }}%</div>
-                <div class="progress" style="height:5px; margin-top:2px;">
-                  <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning"
-                       style="width:{{ a.analysis.progress }}%"></div>
-                </div>
-              {% else %}
-                <span class="badge bg-secondary" style="font-size:11px;">⏳ {{ a.analysis.status }}</span>
-              {% endif %}
-            {% else %}
-              <span class="text-muted" style="font-size:11px;">—</span>
-            {% endif %}
-          </td>
-
-          {# Azione #}
-          <td>
-            <form method="post"
-                  action="/admin/ui/appointments/{{ a.account }}/{{ a.id }}/analyze"
-                  style="display:inline;">
-              <button type="submit"
-                      class="btn btn-dark btn-sm"
-                      style="font-size:11px; padding:3px 10px;"
-                      {% if a.analysis and a.analysis.status == 'completed' %}
-                      onclick="return confirm('Già analizzato. Eseguire di nuovo?')"
-                      {% endif %}>
-                {% if a.analysis and a.analysis.status == 'completed' %}↺ Ri-analizza{% else %}▶ Analizza{% endif %}
-              </button>
-            </form>
-          </td>
-
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<p class="text-muted small mt-2">
-  <span class="dot-ok">●</span> presente &nbsp;
-  <span class="dot-miss">●</span> assente &nbsp;·&nbsp;
-  S = Script &nbsp; Q = Qualificazione &nbsp; I = Info cliente
-  &nbsp;·&nbsp; Clicca su una colonna per ordinare.
-</p>
-
-{% else %}
-<div class="card shadow-sm text-center py-5">
-  <div style="font-size:2rem;">📅</div>
-  <p class="text-muted mt-2 mb-0">
-    Nessun appuntamento trovato negli ultimi 30 giorni.<br>
-    <small>Verifica che le credenziali Acuity siano configurate.</small>
-  </p>
-</div>
-{% endif %}
-
-{% if appointments and appointments | selectattr("analysis") | selectattr("analysis.status", "equalto", "processing") | list %}
-<script>setTimeout(() => window.location.reload(), 4000);</script>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
+<style>
+  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  th.sortable:hover { color:var(--ec-navy); }
+  th.sortable .sort-icon {
+    display:inline-block; width:12px; font-size:9px;
+    opacity:.35; margin-left:3px; vertical-align:middle;
+  }
+  th.sortable.asc  .sort-icon,
+  th.sortable.desc .sort-icon { opacity:1; }
+</style>
+
 <script>
 (function () {
-  var _LS_COL = 'appt_sort_col';
-  var _LS_DIR = 'appt_sort_dir';
+  var _LS_COL  = 'appt_sort_col';
+  var _LS_DIR  = 'appt_sort_dir';
+  var _lastCol = -1;
+  var _ascending = true;
+  var _reloadTimer = null;
 
-  // ── Parse "dd/mm/yyyy HH:MM" → timestamp for date sorting
+  /* ── Date parser: "dd/mm/yyyy HH:MM" → timestamp ── */
   function parseDate(str) {
     if (!str || str === '—') return 0;
     var m = str.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
     if (!m) return 0;
-    return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]).getTime();
+    return new Date(+m[3], +m[2]-1, +m[1], +m[4], +m[5]).getTime();
   }
 
-  var _lastCol  = -1;
-  var _ascending = true;
-
+  /* ── Sort logic ── */
   function applySort(col, ascending) {
     var table = document.getElementById('apptTable');
     if (!table) return;
@@ -263,7 +67,6 @@
     _lastCol   = col;
     _ascending = ascending;
 
-    // Update header indicators
     table.querySelectorAll('th.sortable').forEach(function (h) {
       h.classList.remove('asc', 'desc');
       h.querySelector('.sort-icon').textContent = '⇅';
@@ -272,11 +75,12 @@
     th.querySelector('.sort-icon').textContent = ascending ? '▲' : '▼';
 
     rows.sort(function (rowA, rowB) {
-      var cellA = rowA.cells[col];
-      var cellB = rowB.cells[col];
-      var valA  = (cellA && cellA.dataset.val !== undefined ? cellA.dataset.val : (cellA ? cellA.textContent : '')).trim();
-      var valB  = (cellB && cellB.dataset.val !== undefined ? cellB.dataset.val : (cellB ? cellB.textContent : '')).trim();
-      var cmp   = type === 'date'
+      var cellA = rowA.cells[col], cellB = rowB.cells[col];
+      var valA = (cellA && cellA.dataset.val !== undefined
+        ? cellA.dataset.val : (cellA ? cellA.textContent : '')).trim();
+      var valB = (cellB && cellB.dataset.val !== undefined
+        ? cellB.dataset.val : (cellB ? cellB.textContent : '')).trim();
+      var cmp = (type === 'date')
         ? parseDate(valA) - parseDate(valB)
         : valA.localeCompare(valB, 'it', { sensitivity: 'base' });
       return ascending ? cmp : -cmp;
@@ -284,24 +88,18 @@
     rows.forEach(function (r) { tbody.appendChild(r); });
   }
 
-  function sortTable(th) {
-    var col = parseInt(th.dataset.col, 10);
-    var asc = (_lastCol === col) ? !_ascending : true;
-    applySort(col, asc);
-    // Persist to localStorage
-    try {
-      localStorage.setItem(_LS_COL, col);
-      localStorage.setItem(_LS_DIR, asc ? 'asc' : 'desc');
-    } catch (e) {}
-  }
-
-  document.addEventListener('DOMContentLoaded', function () {
-    // Attach click handlers
+  function initSort() {
     document.querySelectorAll('#apptTable th.sortable').forEach(function (th) {
-      th.addEventListener('click', function () { sortTable(th); });
+      th.addEventListener('click', function () {
+        var col = parseInt(th.dataset.col, 10);
+        var asc = (_lastCol === col) ? !_ascending : true;
+        applySort(col, asc);
+        try {
+          localStorage.setItem(_LS_COL, col);
+          localStorage.setItem(_LS_DIR, asc ? 'asc' : 'desc');
+        } catch (e) {}
+      });
     });
-
-    // Restore last sort from localStorage
     try {
       var savedCol = localStorage.getItem(_LS_COL);
       var savedDir = localStorage.getItem(_LS_DIR);
@@ -309,7 +107,58 @@
         applySort(parseInt(savedCol, 10), savedDir !== 'desc');
       }
     } catch (e) {}
-  });
+  }
+
+  /* ── Spinner HTML ── */
+  function spinnerHtml() {
+    return '<div class="text-center py-5 text-muted">' +
+      '<div class="spinner-border" role="status" ' +
+      'style="width:1.5rem;height:1.5rem;border-width:2px;color:var(--ec-slate);"></div>' +
+      '<p class="mt-2 small mb-0">Caricamento appuntamenti Acuity\u2026</p></div>';
+  }
+
+  /* ── Main loader ── */
+  window.loadAppts = function (forceRefresh) {
+    if (_reloadTimer) { clearTimeout(_reloadTimer); _reloadTimer = null; }
+    document.getElementById('appt-refresh').style.display = 'none';
+    document.getElementById('appt-container').innerHTML = spinnerHtml();
+
+    var url = '/admin/ui/appointments/data' + (forceRefresh ? '?refresh=1' : '');
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (r) {
+        if (r.status === 401) { window.location = '/admin/ui/login'; return null; }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      })
+      .then(function (html) {
+        if (html === null) return;
+        var container = document.getElementById('appt-container');
+        container.innerHTML = html;
+
+        /* update subtitle */
+        var wrapper = document.getElementById('appt-data');
+        if (wrapper) {
+          var sub = wrapper.getAttribute('data-subtitle');
+          if (sub) document.getElementById('appt-subtitle').textContent = sub;
+
+          /* auto-reload if any analysis is still processing */
+          if (wrapper.getAttribute('data-auto-reload') === 'true') {
+            _reloadTimer = setTimeout(function () { window.loadAppts(false); }, 4000);
+          }
+        }
+
+        initSort();
+        document.getElementById('appt-refresh').style.display = '';
+      })
+      .catch(function (err) {
+        document.getElementById('appt-container').innerHTML =
+          '<div class="alert alert-danger">Errore nel caricamento dati (' + err + '). ' +
+          '<a href="#" onclick="loadAppts(true);return false;">Riprova</a></div>';
+        document.getElementById('appt-refresh').style.display = '';
+      });
+  };
+
+  document.addEventListener('DOMContentLoaded', function () { window.loadAppts(false); });
 })();
 </script>
 {% endblock %}

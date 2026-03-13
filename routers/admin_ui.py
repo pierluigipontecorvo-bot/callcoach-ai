@@ -463,27 +463,55 @@ async def analysis_print(
     return HTMLResponse(content=html)
 
 
-# ── Appointments list ─────────────────────────────────────────────────────────
+# ── Appointments list (instant shell — no Acuity calls) ──────────────────────
 
 @router.get("/appointments", response_class=HTMLResponse)
-async def appointments_list(
+async def appointments_list(request: Request):
+    """Render the shell instantly; data loads async via /appointments/data."""
+    if not _is_admin(request):
+        return _login_redirect()
+    return templates.TemplateResponse(
+        "appointments_list.html",
+        {
+            "request": request,
+            "active_page": "appointments",
+            "flash_ok": request.query_params.get("ok", ""),
+            "flash_err": request.query_params.get("err", ""),
+        },
+    )
+
+
+# ── Appointments data fragment (called async by JS) ───────────────────────────
+
+@router.get("/appointments/data", response_class=HTMLResponse)
+async def appointments_data(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    """Return the appointments table HTML fragment (heavy, called via fetch())."""
     if not _is_admin(request):
-        return _login_redirect()
+        return HTMLResponse(status_code=401)
 
     from datetime import datetime, timedelta, timezone
 
-    from services.acuity import extract_ragione_sociale, get_operator_display, list_appointments
+    from services.acuity import (
+        clear_appointments_cache,
+        extract_ragione_sociale,
+        get_operator_display,
+        list_appointments,
+    )
     from services.campaign_parser import parse_campaign_code
     from utils.helpers import parse_iso_datetime
 
+    # ?refresh=1 forces a fresh Acuity fetch by clearing the in-memory cache
+    if request.query_params.get("refresh") == "1":
+        clear_appointments_cache()
+
     now = datetime.now(timezone.utc)
     min_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    max_date = (now + timedelta(days=365)).strftime("%Y-%m-%d")  # tutti i futuri
+    max_date = (now + timedelta(days=365)).strftime("%Y-%m-%d")
 
-    # Fetch from both accounts in parallel
+    # Fetch from both Acuity accounts in parallel
     acuity_results = await asyncio.gather(
         list_appointments(1, min_date=min_date, max_date=max_date),
         list_appointments(2, min_date=min_date, max_date=max_date),
@@ -499,17 +527,21 @@ async def appointments_list(
 
     all_appts = sorted(appts_1 + appts_2, key=lambda a: a.get("datetime", ""), reverse=True)
 
-    # Load ALL campaigns (active + inactive) for display indicators
+    # Load ALL campaigns (active + inactive) — one query
     camp_result = await db.execute(
         select(Campaign).where(Campaign.code != GLOBAL_CODE)
     )
     _all_camps = list(camp_result.scalars().all())
-    # Only active ones are used for actual config matching
     all_campaigns: dict[str, Campaign] = {c.code: c for c in _all_camps if c.active}
-    # Inactive ones are used to give a better warning hint in the UI
     all_campaigns_inactive: dict[str, Campaign] = {c.code: c for c in _all_camps if not c.active}
 
-    # Load existing analyses for these appointments (one query)
+    logger.info(
+        "appointments/data: %d active campaigns loaded: %s",
+        len(all_campaigns),
+        sorted(all_campaigns.keys()),
+    )
+
+    # Existing analyses for these appointments — one query
     appt_ids = [str(a["id"]) for a in all_appts]
     if appt_ids:
         ana_result = await db.execute(
@@ -533,29 +565,30 @@ async def appointments_list(
     for a in all_appts:
         appt_id = str(a["id"])
         parsed = parse_campaign_code(a.get("type", ""))
-        campaign_code = parsed.get("raw") if parsed.get("valid") else None
+        # Normalise: strip whitespace so "AVANZ-AVI-0000 " == "AVANZ-AVI-0000"
+        campaign_code = parsed.get("raw", "").strip() if parsed.get("valid") else None
 
-        # In-memory longest-prefix match (active campaigns only)
         campaign_cfg = _match_campaign_prefix(campaign_code, all_campaigns) if campaign_code else None
-        # Check if there's a match in inactive campaigns (helps diagnose ⚠ cause)
         campaign_inactive = (
             campaign_cfg is None
             and bool(_match_campaign_prefix(campaign_code, all_campaigns_inactive))
         ) if campaign_code else False
 
-        # Operator — OPR. form field (primary) or op.XX.nome@effoncall.com (fallback)
-        op_display = get_operator_display(a)
+        if campaign_code and not campaign_cfg:
+            logger.info(
+                "No active campaign match for code=%r  inactive_match=%s",
+                campaign_code,
+                campaign_inactive,
+            )
 
-        # Ragione sociale — from Acuity form fields
+        op_display = get_operator_display(a)
         ragione = extract_ragione_sociale(a) or "—"
 
-        # Labels — preserve Acuity color alongside name
         labels = [
             {"name": lbl.get("name", ""), "color": lbl.get("color") or ""}
             for lbl in (a.get("labels") or [])
         ]
 
-        # Datetime
         dt_raw = a.get("datetime", "")
         try:
             dt_obj = parse_iso_datetime(dt_raw)
@@ -579,14 +612,17 @@ async def appointments_list(
             "analysis": analyses_map.get(appt_id),
         })
 
+    has_processing = any(
+        a.get("analysis") and a["analysis"]["status"] == "processing"
+        for a in enriched
+    )
+
     return templates.TemplateResponse(
-        "appointments_list.html",
+        "appointments_table_fragment.html",
         {
             "request": request,
             "appointments": enriched,
-            "active_page": "appointments",
-            "flash_ok": request.query_params.get("ok", ""),
-            "flash_err": request.query_params.get("err", ""),
+            "has_processing": has_processing,
         },
     )
 
@@ -752,7 +788,7 @@ def _match_campaign_prefix(campaign_code: str, all_campaigns: dict) -> Optional[
     """In-memory longest-prefix match (mirrors campaign_db.get_campaign_by_code)."""
     if not campaign_code:
         return None
-    tokens = campaign_code.split("-")
+    tokens = [t.strip() for t in campaign_code.strip().split("-") if t.strip()]
     for i in range(len(tokens), 0, -1):
         candidate = "-".join(tokens[:i])
         if candidate in all_campaigns:
