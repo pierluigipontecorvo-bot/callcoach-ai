@@ -14,7 +14,13 @@
       {% endif %}
     </p>
   </div>
-  <a href="/admin/ui/analyses" class="btn btn-outline-secondary btn-sm">← Torna alla lista</a>
+  <div class="d-flex gap-2">
+    {% if analysis.report_html %}
+    <a href="/admin/ui/analyses/{{ analysis.id }}/print" target="_blank"
+       class="btn btn-outline-secondary btn-sm">↗ Stampa / PDF</a>
+    {% endif %}
+    <a href="/admin/ui/analyses" class="btn btn-outline-secondary btn-sm">← Torna alla lista</a>
+  </div>
 </div>
 
 {# ── Metadata ── #}

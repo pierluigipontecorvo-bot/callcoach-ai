@@ -59,6 +59,25 @@ async def _update_progress(analysis_id: int, progress: int, message: str):
             await session.commit()
 
 
+async def _update_initial_info(
+    analysis_id: int,
+    campaign_code: str,
+    operator_name: str,
+    appointment_dt,
+):
+    """Save identifying info as soon as it is known, so the UI can display it during processing."""
+    from database import AsyncSessionLocal
+    from models import Analysis
+
+    async with AsyncSessionLocal() as session:
+        obj = await session.get(Analysis, analysis_id)
+        if obj:
+            obj.campaign_code = campaign_code
+            obj.operator_name = operator_name or None
+            obj.appointment_datetime = appointment_dt
+            await session.commit()
+
+
 async def _save_analysis(
     *,
     analysis_id: int,
@@ -171,6 +190,16 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         logger.info("[%s] Operator email: %s", appointment_id, operator_email)
     else:
         logger.info("[%s] No operator email found in appointment data", appointment_id)
+
+    # Save identifying info immediately so the UI shows it during processing
+    # Prefer the agent name from the campaign code; fall back to Acuity email extraction
+    _initial_op_name = campaign_info.get("agente") or _extract_operator_name(operator_email) or ""
+    await _update_initial_info(
+        analysis_id,
+        campaign_code=campaign_info["raw"],
+        operator_name=_initial_op_name,
+        appointment_dt=appointment_dt,
+    )
 
     # ── 2. Find & download ALL recordings for this contact ────────────────────
     await _update_progress(analysis_id, 10, "Ricerca registrazione su Sidial...")
@@ -296,7 +325,9 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 8. Save to DB ─────────────────────────────────────────────────────────
     await _update_progress(analysis_id, 95, "Salvataggio...")
     try:
-        operator_name_db = _extract_operator_name(operator_email) or campaign_info.get("agente", "")
+        # Prefer the agent name from the campaign code; fall back to Acuity email extraction.
+        # This ensures the DB record matches what generate_html_report() puts in the HTML.
+        operator_name_db = campaign_info.get("agente") or _extract_operator_name(operator_email) or ""
 
         await _save_analysis(
             analysis_id=analysis_id,

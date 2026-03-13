@@ -378,6 +378,69 @@ async def analysis_detail(
     )
 
 
+# ── Analysis print / PDF ──────────────────────────────────────────────────────
+
+@router.get("/analyses/{analysis_id}/print", response_class=HTMLResponse)
+async def analysis_print(
+    analysis_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Serve the analysis report as a standalone HTML page suitable for
+    browser print-to-PDF.  Transcript and raw JSON are excluded.
+    """
+    if not _is_admin(request):
+        return _login_redirect()
+
+    result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
+    analysis = result.scalar_one_or_none()
+    if not analysis or not analysis.report_html:
+        return RedirectResponse(url=f"/admin/ui/analyses/{analysis_id}", status_code=303)
+
+    # Inject print controls and print CSS into the report HTML
+    report_id_label = f"Report #{analysis_id}"
+    if analysis.campaign_code:
+        report_id_label += f" &mdash; {analysis.campaign_code}"
+
+    print_bar = f"""
+<style>
+  @media print {{
+    .ec-print-bar {{ display: none !important; }}
+    body {{ background: #fff !important; }}
+  }}
+</style>
+<div class="ec-print-bar" style="
+  position:sticky; top:0; z-index:100;
+  background:#001126; color:#fff;
+  padding:8px 16px;
+  display:flex; align-items:center; justify-content:space-between;
+  font-family:Arial,sans-serif; font-size:12px;
+">
+  <span style="color:rgba(255,255,255,.6)">{report_id_label}</span>
+  <div style="display:flex;gap:8px">
+    <button onclick="window.print()" style="
+      background:#fff; color:#001126; border:none;
+      padding:5px 14px; border-radius:4px; cursor:pointer;
+      font-size:12px; font-weight:700; letter-spacing:.3px;
+    ">Stampa / Salva PDF</button>
+    <button onclick="window.close()" style="
+      background:rgba(255,255,255,.15); color:#fff; border:none;
+      padding:5px 12px; border-radius:4px; cursor:pointer; font-size:12px;
+    ">Chiudi</button>
+  </div>
+</div>
+"""
+
+    html = analysis.report_html
+    if "<body>" in html:
+        html = html.replace("<body>", f"<body>\n{print_bar}", 1)
+    else:
+        html = print_bar + html
+
+    return HTMLResponse(content=html)
+
+
 # ── Appointments list ─────────────────────────────────────────────────────────
 
 @router.get("/appointments", response_class=HTMLResponse)
