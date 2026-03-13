@@ -499,13 +499,15 @@ async def appointments_list(
 
     all_appts = sorted(appts_1 + appts_2, key=lambda a: a.get("datetime", ""), reverse=True)
 
-    # Load all active campaigns once for in-memory prefix matching
+    # Load ALL campaigns (active + inactive) for display indicators
     camp_result = await db.execute(
-        select(Campaign)
-        .where(Campaign.active.is_(True))
-        .where(Campaign.code != GLOBAL_CODE)
+        select(Campaign).where(Campaign.code != GLOBAL_CODE)
     )
-    all_campaigns: dict[str, Campaign] = {c.code: c for c in camp_result.scalars().all()}
+    _all_camps = list(camp_result.scalars().all())
+    # Only active ones are used for actual config matching
+    all_campaigns: dict[str, Campaign] = {c.code: c for c in _all_camps if c.active}
+    # Inactive ones are used to give a better warning hint in the UI
+    all_campaigns_inactive: dict[str, Campaign] = {c.code: c for c in _all_camps if not c.active}
 
     # Load existing analyses for these appointments (one query)
     appt_ids = [str(a["id"]) for a in all_appts]
@@ -533,8 +535,13 @@ async def appointments_list(
         parsed = parse_campaign_code(a.get("type", ""))
         campaign_code = parsed.get("raw") if parsed.get("valid") else None
 
-        # In-memory longest-prefix match
+        # In-memory longest-prefix match (active campaigns only)
         campaign_cfg = _match_campaign_prefix(campaign_code, all_campaigns) if campaign_code else None
+        # Check if there's a match in inactive campaigns (helps diagnose ⚠ cause)
+        campaign_inactive = (
+            campaign_cfg is None
+            and bool(_match_campaign_prefix(campaign_code, all_campaigns_inactive))
+        ) if campaign_code else False
 
         # Operator — OPR. form field (primary) or op.XX.nome@effoncall.com (fallback)
         op_display = get_operator_display(a)
@@ -564,6 +571,7 @@ async def appointments_list(
             "dt_display": dt_display,
             "campaign_code": campaign_code or a.get("type", "—"),
             "campaign_cfg": campaign_cfg,
+            "campaign_inactive": campaign_inactive,
             "ragione": ragione,
             "op_display": op_display,
             "labels": labels,

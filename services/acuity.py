@@ -171,9 +171,9 @@ def get_operator_display(appointment_data: dict) -> str:
 
     Priority:
       1. OPR. / NOME OPR / NOME OPERATRICE / NOME OPERATORE form field
-         Value already in '91-STEFANO C.' format → rendered as '91 · STEFANO C.'
-      2. op.XX.nome@effoncall.com email  →  '91 · STEFANO'
-      3. Any op.XX.*@* email (e.g. Gmail)  →  '91 · —'
+         Value already in '91-STEFANO C.' format → rendered as '91-STEFANO C.'
+      2. op.XX.nome@effoncall.com email  →  '91-STEFANO'
+      3. Any op.XX.*@* email (e.g. Gmail)  →  '91-—'
          (number known but name not available separately)
       4. '—'
     """
@@ -182,7 +182,7 @@ def get_operator_display(appointment_data: dict) -> str:
     if opr:
         m = _OPR_VALUE_RE.match(opr)
         if m:
-            return f"{m.group(1)} · {m.group(2).strip().upper()}"
+            return f"{m.group(1)}-{m.group(2).strip().upper()}"
         return opr.upper()
 
     # 2. op.XX.nome@effoncall.com email
@@ -209,19 +209,19 @@ def get_operator_display(appointment_data: dict) -> str:
 
     op_num = _find_op_num(appointment_data)
     if op_num:
-        return f"{op_num} · —"
+        return f"{op_num}-—"
 
     return "—"
 
 
 def format_operator_display(op_email: str) -> str:
     """
-    op.12.mario@effoncall.com  →  '12 · MARIO'
+    op.12.mario@effoncall.com  →  '12-MARIO'
     Returns the raw email (or '—') if the pattern doesn't match.
     """
     m = re.match(r"op\.(\d+)\.([^@]+)@effoncall\.com", op_email.strip(), re.IGNORECASE)
     if m:
-        return f"{m.group(1)} · {m.group(2).upper()}"
+        return f"{m.group(1)}-{m.group(2).upper()}"
     return op_email or "—"
 
 
