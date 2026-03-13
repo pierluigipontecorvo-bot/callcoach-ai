@@ -24,6 +24,22 @@ async def lifespan(app: FastAPI):
         # Don't crash on startup if Whisper isn't installed yet (e.g. local dev)
         logger.warning("Whisper model not loaded at startup: %s", exc)
 
+    # ── Fix campaigns with active=NULL → set to TRUE (schema DEFAULT TRUE) ────
+    try:
+        from sqlalchemy import text
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("UPDATE campaigns SET active = TRUE WHERE active IS NULL")
+            )
+            await session.commit()
+            if result.rowcount:
+                logger.info(
+                    "campaign active migration: fixed %d NULL→TRUE record(s)", result.rowcount
+                )
+    except Exception as exc:
+        logger.warning("campaign active migration failed (non-fatal): %s", exc)
+
     # ── Migrate operator_name separator: ' · ' → '-' ───────────────────────
     # Old records were stored as 'XX · NOME'; new format is 'XX-NOME'.
     try:

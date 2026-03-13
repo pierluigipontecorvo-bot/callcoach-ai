@@ -534,13 +534,15 @@ async def appointments_data(
     _all_camps = list(camp_result.scalars().all())
     # Normalise keys: strip + uppercase so DB entries with accidental whitespace
     # or wrong casing (e.g. "AVANZ-AVI-0000 ") still match correctly.
-    all_campaigns: dict[str, Campaign] = {c.code.strip().upper(): c for c in _all_camps if c.active}
-    all_campaigns_inactive: dict[str, Campaign] = {c.code.strip().upper(): c for c in _all_camps if not c.active}
+    # Treat active=NULL as active=TRUE (matches schema DEFAULT TRUE intent).
+    all_campaigns: dict[str, Campaign] = {c.code.strip().upper(): c for c in _all_camps if c.active is not False}
+    all_campaigns_inactive: dict[str, Campaign] = {c.code.strip().upper(): c for c in _all_camps if c.active is False}
 
     logger.info(
-        "appointments/data: %d active campaigns loaded: %s",
+        "appointments/data: %d active campaigns loaded: %s | raw active values: %s",
         len(all_campaigns),
         sorted(all_campaigns.keys()),
+        {c.code: c.active for c in _all_camps},
     )
 
     # Existing analyses for these appointments — one query
