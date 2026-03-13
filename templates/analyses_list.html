@@ -81,8 +81,14 @@
             {% endif %}
           </td>
           <td class="text-muted small">{{ a.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
-          <td>
+          <td style="white-space:nowrap;">
             <a href="/admin/ui/analyses/{{ a.id }}" class="btn btn-sm btn-outline-secondary">Dettaglio</a>
+            <form method="post" action="/admin/ui/analyses/{{ a.id }}/delete"
+                  style="display:inline;"
+                  onsubmit="return confirm('Eliminare analisi #{{ a.id }}? L\'operazione non può essere annullata.')">
+              <button type="submit" class="btn btn-sm btn-outline-danger ms-1"
+                      style="padding:2px 8px; font-size:12px;" title="Elimina">✕</button>
+            </form>
           </td>
         </tr>
         {% endfor %}

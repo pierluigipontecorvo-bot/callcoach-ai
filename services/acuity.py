@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import logging
 import re
+import time as _time
 from typing import Optional
 
 import httpx
@@ -110,9 +111,14 @@ def should_analyze(payload: dict) -> bool:
 # ── Operator detection ────────────────────────────────────────────────────────
 
 _OPERATOR_EMAIL_RE = re.compile(r"op\.\d+\.[^@]+@effoncall\.com", re.IGNORECASE)
+# Matches op.XX.*@* (any domain — e.g. Gmail) for extracting the operator number
+_ANY_OP_EMAIL_RE  = re.compile(r"op\.(\d+)\.[^@]+@", re.IGNORECASE)
 
 # OPR. field: value like "91-STEFANO C." or "12-MARIO R."
 _OPR_VALUE_RE = re.compile(r"^(\d+)-(.+)$")
+
+# Form field names that contain the operator identifier (case-insensitive, accent-stripped)
+_OPR_FIELD_KEYWORDS_U = ("OPR", "OPERATRICE", "OPERATORE")
 
 
 def find_operator_email(appointment_data: dict) -> str:
@@ -141,14 +147,18 @@ def find_operator_email(appointment_data: dict) -> str:
 
 def find_opr_field(appointment_data: dict) -> str:
     """
-    Search Acuity form fields for a field named 'OPR.' (or similar) and
-    return its value (e.g. '91-STEFANO C.').
+    Search Acuity form fields for an operator-name field and return its value
+    (e.g. '91-STEFANO C.').
+
+    Matches field names containing: OPR, OPERATRICE, OPERATORE
+    (e.g. 'OPR.', 'NOME OPR', 'NOME OPERATRICE', 'NOME OPERATORE', 'Operatrice')
     Returns empty string if not found.
     """
     for form in (appointment_data.get("forms") or []):
         for val in (form.get("values") or []):
-            field_name = (val.get("name") or "").strip().upper()
-            if field_name.startswith("OPR"):
+            # Uppercase + strip accents for reliable matching
+            fn = re.sub(r"[ÀÁÂÈÉÊÌÍÎÒÓÔÙÚÛ]", "A", (val.get("name") or "").strip().upper())
+            if any(kw in fn for kw in _OPR_FIELD_KEYWORDS_U):
                 v = (val.get("value") or "").strip()
                 if v:
                     return v
@@ -160,11 +170,14 @@ def get_operator_display(appointment_data: dict) -> str:
     Return the best available operator display string for an appointment.
 
     Priority:
-      1. OPR. form field  →  '91-STEFANO C.'  →  '91 · STEFANO C.'
+      1. OPR. / NOME OPR / NOME OPERATRICE / NOME OPERATORE form field
+         Value already in '91-STEFANO C.' format → rendered as '91 · STEFANO C.'
       2. op.XX.nome@effoncall.com email  →  '91 · STEFANO'
-      3. '—' (should never occur if Acuity data is complete)
+      3. Any op.XX.*@* email (e.g. Gmail)  →  '91 · —'
+         (number known but name not available separately)
+      4. '—'
     """
-    # 1. OPR. field
+    # 1. OPR./NOME OPERATRICE/etc. form field
     opr = find_opr_field(appointment_data)
     if opr:
         m = _OPR_VALUE_RE.match(opr)
@@ -172,10 +185,31 @@ def get_operator_display(appointment_data: dict) -> str:
             return f"{m.group(1)} · {m.group(2).strip().upper()}"
         return opr.upper()
 
-    # 2. Email fallback
+    # 2. op.XX.nome@effoncall.com email
     email = find_operator_email(appointment_data)
     if email:
         return format_operator_display(email)
+
+    # 3. Any op.XX.*@* email (Gmail etc.) — extract number only
+    def _find_op_num(v: object) -> str:
+        if isinstance(v, str):
+            m = _ANY_OP_EMAIL_RE.search(v)
+            return m.group(1) if m else ""
+        if isinstance(v, dict):
+            for x in v.values():
+                r = _find_op_num(x)
+                if r:
+                    return r
+        if isinstance(v, list):
+            for x in v:
+                r = _find_op_num(x)
+                if r:
+                    return r
+        return ""
+
+    op_num = _find_op_num(appointment_data)
+    if op_num:
+        return f"{op_num} · —"
 
     return "—"
 
@@ -217,6 +251,12 @@ def extract_ragione_sociale(appointment_data: dict) -> str:
     return " ".join(p for p in parts if p).strip() or ""
 
 
+# ── In-memory cache for list_appointments (avoids re-fetching on every page nav) ─
+
+_APPTS_CACHE: dict = {}
+_APPTS_CACHE_TTL = 60  # seconds — refresh at most once per minute
+
+
 # ── REST API – list appointments ───────────────────────────────────────────────
 
 async def list_appointments(
@@ -227,11 +267,21 @@ async def list_appointments(
 ) -> list[dict]:
     """
     Fetch a paginated list of appointments (newest first).
+    Results are cached for _APPTS_CACHE_TTL seconds to avoid hitting the
+    Acuity API on every page navigation.
     Returns an empty list on failure or if credentials are not configured.
     """
     user_id, api_key, _ = _get_credentials(account_id)
     if not user_id or not api_key:
         return []
+
+    cache_key = (account_id, min_date, max_date, max_results)
+    now = _time.monotonic()
+    if cache_key in _APPTS_CACHE:
+        ts, cached_data = _APPTS_CACHE[cache_key]
+        if now - ts < _APPTS_CACHE_TTL:
+            logger.debug("list_appointments cache HIT account=%d", account_id)
+            return cached_data
 
     url = f"{_ACUITY_API_BASE}/appointments"
     params: dict = {"max": max_results, "direction": "DESC"}
@@ -249,10 +299,13 @@ async def list_appointments(
             )
             resp.raise_for_status()
             data = resp.json()
-            return data if isinstance(data, list) else []
+            result = data if isinstance(data, list) else []
         except Exception as exc:
             logger.error("list_appointments failed account=%d: %s", account_id, exc)
             return []
+
+    _APPTS_CACHE[cache_key] = (_time.monotonic(), result)
+    return result
 
 
 # ── REST API – get appointment ────────────────────────────────────────────────

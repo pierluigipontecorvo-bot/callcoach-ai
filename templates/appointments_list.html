@@ -8,7 +8,7 @@
   <div>
     <h4 class="fw-bold mb-0">Appuntamenti da analizzare</h4>
     <p class="text-muted small mb-0">
-      Ultimi 60 giorni + prossimi 30 —
+      Ultimi 30 giorni + tutti i futuri —
       <strong>{{ appointments | length }}</strong> appuntamenti
     </p>
   </div>
@@ -219,7 +219,7 @@
 <div class="card shadow-sm text-center py-5">
   <div style="font-size:2rem;">📅</div>
   <p class="text-muted mt-2 mb-0">
-    Nessun appuntamento trovato negli ultimi 60 giorni.<br>
+    Nessun appuntamento trovato negli ultimi 30 giorni.<br>
     <small>Verifica che le credenziali Acuity siano configurate.</small>
   </p>
 </div>
@@ -233,6 +233,9 @@
 {% block scripts %}
 <script>
 (function () {
+  var _LS_COL = 'appt_sort_col';
+  var _LS_DIR = 'appt_sort_dir';
+
   // ── Parse "dd/mm/yyyy HH:MM" → timestamp for date sorting
   function parseDate(str) {
     if (!str || str === '—') return 0;
@@ -241,58 +244,67 @@
     return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]).getTime();
   }
 
-  // ── Sort table by column index
-  var _lastCol = -1;
+  var _lastCol  = -1;
   var _ascending = true;
 
-  function sortTable(th) {
-    var col   = parseInt(th.dataset.col, 10);
-    var type  = th.dataset.type || 'text';
+  function applySort(col, ascending) {
     var table = document.getElementById('apptTable');
+    if (!table) return;
     var tbody = table.querySelector('tbody');
     var rows  = Array.from(tbody.querySelectorAll('tr'));
+    var th    = table.querySelector('th.sortable[data-col="' + col + '"]');
+    if (!th) return;
+    var type  = th.dataset.type || 'text';
 
-    // Toggle direction; first click on a new column → ascending
-    if (_lastCol === col) {
-      _ascending = !_ascending;
-    } else {
-      _ascending = true;
-      _lastCol = col;
-    }
+    _lastCol   = col;
+    _ascending = ascending;
 
     // Update header indicators
     table.querySelectorAll('th.sortable').forEach(function (h) {
       h.classList.remove('asc', 'desc');
       h.querySelector('.sort-icon').textContent = '⇅';
     });
-    th.classList.add(_ascending ? 'asc' : 'desc');
-    th.querySelector('.sort-icon').textContent = _ascending ? '▲' : '▼';
+    th.classList.add(ascending ? 'asc' : 'desc');
+    th.querySelector('.sort-icon').textContent = ascending ? '▲' : '▼';
 
-    // Sort rows
     rows.sort(function (rowA, rowB) {
       var cellA = rowA.cells[col];
       var cellB = rowB.cells[col];
-      var valA  = (cellA.dataset.val !== undefined ? cellA.dataset.val : cellA.textContent).trim();
-      var valB  = (cellB.dataset.val !== undefined ? cellB.dataset.val : cellB.textContent).trim();
-
-      var cmp = 0;
-      if (type === 'date') {
-        cmp = parseDate(valA) - parseDate(valB);
-      } else {
-        cmp = valA.localeCompare(valB, 'it', { sensitivity: 'base' });
-      }
-      return _ascending ? cmp : -cmp;
+      var valA  = (cellA && cellA.dataset.val !== undefined ? cellA.dataset.val : (cellA ? cellA.textContent : '')).trim();
+      var valB  = (cellB && cellB.dataset.val !== undefined ? cellB.dataset.val : (cellB ? cellB.textContent : '')).trim();
+      var cmp   = type === 'date'
+        ? parseDate(valA) - parseDate(valB)
+        : valA.localeCompare(valB, 'it', { sensitivity: 'base' });
+      return ascending ? cmp : -cmp;
     });
-
-    // Re-insert rows in new order
     rows.forEach(function (r) { tbody.appendChild(r); });
   }
 
-  // ── Attach click handlers after DOM ready
+  function sortTable(th) {
+    var col = parseInt(th.dataset.col, 10);
+    var asc = (_lastCol === col) ? !_ascending : true;
+    applySort(col, asc);
+    // Persist to localStorage
+    try {
+      localStorage.setItem(_LS_COL, col);
+      localStorage.setItem(_LS_DIR, asc ? 'asc' : 'desc');
+    } catch (e) {}
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
+    // Attach click handlers
     document.querySelectorAll('#apptTable th.sortable').forEach(function (th) {
       th.addEventListener('click', function () { sortTable(th); });
     });
+
+    // Restore last sort from localStorage
+    try {
+      var savedCol = localStorage.getItem(_LS_COL);
+      var savedDir = localStorage.getItem(_LS_DIR);
+      if (savedCol !== null) {
+        applySort(parseInt(savedCol, 10), savedDir !== 'desc');
+      }
+    } catch (e) {}
   });
 })();
 </script>

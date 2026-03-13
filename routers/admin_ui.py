@@ -332,6 +332,28 @@ async def analyses_list(
     )
 
 
+# ── Delete single analysis ────────────────────────────────────────────────────
+
+@router.post("/analyses/{analysis_id}/delete")
+async def analysis_delete(
+    analysis_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
+    analysis = result.scalar_one_or_none()
+    if analysis:
+        await db.delete(analysis)
+        await db.commit()
+
+    from urllib.parse import quote
+    msg = quote(f"Analisi #{analysis_id} eliminata.")
+    return RedirectResponse(url=f"/admin/ui/analyses?ok={msg}", status_code=303)
+
+
 # ── Clear all analyses ────────────────────────────────────────────────────────
 
 @router.post("/analyses/clear")
@@ -458,8 +480,8 @@ async def appointments_list(
     from utils.helpers import parse_iso_datetime
 
     now = datetime.now(timezone.utc)
-    min_date = (now - timedelta(days=60)).strftime("%Y-%m-%d")
-    max_date = (now + timedelta(days=30)).strftime("%Y-%m-%d")
+    min_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    max_date = (now + timedelta(days=365)).strftime("%Y-%m-%d")  # tutti i futuri
 
     # Fetch from both accounts in parallel
     acuity_results = await asyncio.gather(

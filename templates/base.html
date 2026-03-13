@@ -6,9 +6,14 @@
   <title>{% block title %}CallCoach Admin{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/favicon.png">
 
-  <!-- Fonts: Poppins (body) + Space Grotesk (headings/UI) -->
+  <!-- DNS prefetch per CDN esterni (risolve DNS in anticipo) -->
+  <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
+  <link rel="dns-prefetch" href="//fonts.googleapis.com">
+  <link rel="dns-prefetch" href="//fonts.gstatic.com">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+  <!-- Fonts: Poppins (body) + Space Grotesk (headings/UI) -->
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <!-- Bootstrap 5 -->
@@ -254,5 +259,29 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {% block scripts %}{% endblock %}
+
+<!-- ── Barra di caricamento navigazione ─────────────────────────────── -->
+<div id="ec-nav-bar"
+     style="position:fixed;top:0;left:0;height:3px;width:0;
+            background:#42a5f5;z-index:10000;
+            transition:width .25s ease,opacity .3s ease;
+            opacity:0;pointer-events:none;"></div>
+<script>
+(function(){
+  var bar = document.getElementById('ec-nav-bar');
+  // Mostra la barra al click sui link del menu laterale
+  document.querySelectorAll('.sidebar .nav-link').forEach(function(a){
+    a.addEventListener('click', function(){
+      bar.style.opacity = '1';
+      bar.style.width   = '65%';
+    });
+  });
+  // Porta al 100% e poi nasconde quando la pagina è pronta
+  window.addEventListener('load', function(){
+    bar.style.width = '100%';
+    setTimeout(function(){ bar.style.opacity = '0'; bar.style.width = '0'; }, 350);
+  });
+})();
+</script>
 </body>
 </html>
