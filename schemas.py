@@ -6,7 +6,8 @@ from pydantic import BaseModel, EmailStr
 # ── Campaign ──────────────────────────────────────────────────────────────────
 
 class CampaignBase(BaseModel):
-    code: str
+    code: str                                    # match pattern, e.g. "INTER" or full code
+    nome: Optional[str] = None                   # human-readable label
     type: str
     client_name: Optional[str] = None
     agent_name: Optional[str] = None
@@ -17,6 +18,7 @@ class CampaignBase(BaseModel):
     qualification_params: Optional[str] = None
     client_info: Optional[str] = None
     email_recipients: Optional[List[str]] = None
+    notes: Optional[str] = None                 # internal notes
     active: bool = True
 
 
@@ -25,6 +27,7 @@ class CampaignCreate(CampaignBase):
 
 
 class CampaignUpdate(BaseModel):
+    nome: Optional[str] = None
     type: Optional[str] = None
     client_name: Optional[str] = None
     agent_name: Optional[str] = None
@@ -35,6 +38,7 @@ class CampaignUpdate(BaseModel):
     qualification_params: Optional[str] = None
     client_info: Optional[str] = None
     email_recipients: Optional[List[str]] = None
+    notes: Optional[str] = None
     active: Optional[bool] = None
 
 

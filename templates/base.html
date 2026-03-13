@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CallCoach Admin{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <style>
+    body { background: #f8f9fa; }
+    .navbar-brand { font-weight: 700; letter-spacing: .5px; }
+    .sidebar { min-height: calc(100vh - 56px); background: #212529; }
+    .sidebar .nav-link { color: #adb5bd; border-radius: 6px; margin: 2px 8px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { background: #343a40; color: #fff; }
+    .sidebar .nav-link .bi { margin-right: 8px; }
+    .card { border: 1px solid #dee2e6; border-radius: 10px; }
+    .badge-prefix { background: #e9ecef; color: #495057; font-size:.75rem; border-radius:4px; padding:2px 6px; }
+    textarea.doc-field { font-family: monospace; font-size: 13px; line-height: 1.5; }
+    .field-status { font-size: 12px; }
+    .dot-ok   { color: #198754; }
+    .dot-miss { color: #dee2e6; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark bg-dark px-3">
+  <a class="navbar-brand" href="/admin/ui/campaigns">
+    🎙 CallCoach <span class="fw-light">Admin</span>
+  </a>
+  <div class="d-flex align-items-center gap-3">
+    <span class="text-secondary small">Effoncall</span>
+    <a href="/admin/ui/logout" class="btn btn-sm btn-outline-secondary">Esci</a>
+  </div>
+</nav>
+
+<div class="container-fluid">
+  <div class="row">
+
+    <!-- Sidebar -->
+    <nav class="col-md-2 sidebar py-3 d-none d-md-block">
+      <ul class="nav flex-column">
+        <li class="nav-item">
+          <a class="nav-link {% if active_page == 'campaigns' %}active{% endif %}"
+             href="/admin/ui/campaigns">
+            📋 Campagne
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if active_page == 'analyses' %}active{% endif %}"
+             href="/admin/ui/analyses">
+            📊 Analisi
+          </a>
+        </li>
+      </ul>
+    </nav>
+
+    <!-- Main content -->
+    <main class="col-md-10 py-4 px-4">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endwith %}
+
+      {% if flash_ok %}
+        <div class="alert alert-success alert-dismissible fade show">
+          {{ flash_ok }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      {% endif %}
+      {% if flash_err %}
+        <div class="alert alert-danger alert-dismissible fade show">
+          {{ flash_err }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </main>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

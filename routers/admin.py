@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models import Analysis, Campaign
+from services.campaign_db import get_campaign_by_code
 from schemas import (
     AnalysisDetailOut,
     AnalysisOut,
@@ -80,27 +81,27 @@ async def create_campaign(
     return campaign
 
 
-@router.get("/campaigns/{code}", response_model=CampaignOut)
+@router.get("/campaigns/{campaign_id}", response_model=CampaignOut)
 async def get_campaign(
-    code: str,
+    campaign_id: int,
     db: AsyncSession = Depends(get_db),
     _=Depends(require_admin),
 ):
-    result = await db.execute(select(Campaign).where(Campaign.code == code))
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
     campaign = result.scalar_one_or_none()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
 
 
-@router.put("/campaigns/{code}", response_model=CampaignOut)
+@router.put("/campaigns/{campaign_id}", response_model=CampaignOut)
 async def update_campaign(
-    code: str,
+    campaign_id: int,
     body: CampaignUpdate,
     db: AsyncSession = Depends(get_db),
     _=Depends(require_admin),
 ):
-    result = await db.execute(select(Campaign).where(Campaign.code == code))
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
     campaign = result.scalar_one_or_none()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -110,6 +111,32 @@ async def update_campaign(
 
     await db.commit()
     await db.refresh(campaign)
+    return campaign
+
+
+@router.delete("/campaigns/{campaign_id}", status_code=204)
+async def delete_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
+    campaign = result.scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    await db.delete(campaign)
+    await db.commit()
+
+
+@router.get("/campaigns/lookup/{campaign_code}", response_model=CampaignOut)
+async def lookup_campaign(
+    campaign_code: str,
+    _=Depends(require_admin),
+):
+    """Simulate the prefix-match lookup the pipeline uses for a given code."""
+    campaign = await get_campaign_by_code(campaign_code)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="No matching campaign config found")
     return campaign
 
 

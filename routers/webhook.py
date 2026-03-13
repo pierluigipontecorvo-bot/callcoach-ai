@@ -4,12 +4,14 @@ Acuity Scheduling webhook receiver + background analysis pipeline.
 
 import json
 import logging
+import re
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from services.acuity import check_webhook_signature, get_appointment, should_analyze
-from services.ai_analysis import analyze_call
+from services.ai_analysis import _extract_operator_name, analyze_call
+from services.campaign_db import get_campaign_by_code
 from services.campaign_parser import parse_campaign_code
 from services.email_service import generate_html_report, send_analysis_report
 from services.sidial import find_and_download_all_recordings
@@ -18,6 +20,33 @@ from utils.helpers import parse_iso_datetime
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 logger = logging.getLogger(__name__)
+
+_OPERATOR_EMAIL_RE = re.compile(r"op\.\d+\.[^@]+@effoncall\.com", re.IGNORECASE)
+
+
+def _find_operator_email(appointment_data: dict) -> str:
+    """
+    Recursively search all string values in the Acuity appointment dict for
+    an email matching op.XX.nome@effoncall.com and return the first match.
+    Returns empty string if not found.
+    """
+    def _search(v) -> str:
+        if isinstance(v, str):
+            m = _OPERATOR_EMAIL_RE.search(v)
+            return m.group(0) if m else ""
+        if isinstance(v, dict):
+            for val in v.values():
+                found = _search(val)
+                if found:
+                    return found
+        if isinstance(v, list):
+            for item in v:
+                found = _search(item)
+                if found:
+                    return found
+        return ""
+
+    return _search(appointment_data)
 
 
 # ── DB helpers (imported lazily to avoid circular imports at module load) ──────
@@ -35,6 +64,7 @@ async def _save_analysis(
     sidial_call_id: str,
     operator_name: str,
     qualification_level: str,
+    email_sent: bool = False,
 ):
     from database import AsyncSessionLocal
     from models import Analysis
@@ -53,7 +83,7 @@ async def _save_analysis(
             qualification_level=qualification_level,
             report_json=report,
             report_html=html_report,
-            email_sent=True,
+            email_sent=email_sent,
             processing_status="completed",
         )
         session.add(obj)
@@ -75,16 +105,8 @@ async def _save_error(appointment_id: str, error_msg: str, acuity_account: int):
         await session.commit()
 
 
-async def _get_campaign_config(campaign_code: str):
-    from database import AsyncSessionLocal
-    from models import Campaign
-    from sqlalchemy import select
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Campaign).where(Campaign.code == campaign_code)
-        )
-        return result.scalar_one_or_none()
+# _get_campaign_config replaced by services.campaign_db.get_campaign_by_code
+# (longest-prefix matching: "INTER" covers all INTER-* campaigns)
 
 
 # ── Full pipeline ──────────────────────────────────────────────────────────────
@@ -121,6 +143,15 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     )
 
     phone = appointment_data.get("phone", "")
+    appointment_dt_str = appointment_data.get("datetime", "")
+    appointment_dt = parse_iso_datetime(appointment_dt_str) if appointment_dt_str else None
+
+    # ── Operator email (format: op.XX.nome@effoncall.com) ─────────────────────
+    operator_email = _find_operator_email(appointment_data)
+    if operator_email:
+        logger.info("[%s] Operator email: %s", appointment_id, operator_email)
+    else:
+        logger.info("[%s] No operator email found in appointment data", appointment_id)
 
     # ── 2. Find & download ALL recordings for this contact ────────────────────
     try:
@@ -163,7 +194,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 4. Load campaign config ───────────────────────────────────────────────
     campaign_db = None
     try:
-        campaign_db = await _get_campaign_config(campaign_info["raw"])
+        campaign_db = await get_campaign_by_code(campaign_info["raw"])
     except Exception as exc:
         logger.warning("[%s] Could not fetch campaign config: %s", appointment_id, exc)
 
@@ -175,6 +206,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             script=campaign_db.script if campaign_db else None,
             qualification_params=campaign_db.qualification_params if campaign_db else None,
             client_info=campaign_db.client_info if campaign_db else None,
+            operator_email=operator_email,
         )
     except Exception as exc:
         msg = f"Claude analysis failed: {exc}"
@@ -184,7 +216,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
 
     # ── 6. HTML report ────────────────────────────────────────────────────────
     appointment_info = {
-        "datetime": appointment_dt_str,
+        "datetime": appointment_data.get("datetime", ""),
         "phone": phone,
         "id": appointment_id,
     }
@@ -193,26 +225,36 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 7. Email ──────────────────────────────────────────────────────────────
     from config import settings as cfg
 
+    # Extract qualification level from new report format (rating 1-3)
+    _rating_to_level = {1: "inaccurata", 2: "da_migliorare", 3: "buona"}
+    qual_rating = report.get("qualificazione", {}).get("rating", 2)
+    qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
+
     recipients: list[str] = []
     if campaign_db and campaign_db.email_recipients:
         recipients = list(campaign_db.email_recipients)
     if not recipients:
         recipients = [cfg.fallback_email]
 
+    email_sent = False
     try:
         await send_analysis_report(
             recipients=recipients,
             html_content=html_report,
             operator_name=campaign_info.get("agente", "Operatore"),
-            qualification_level=report.get("livello_qualificazione", "corretta"),
+            qualification_level=qualification_level,
             appointment_datetime=appointment_dt_str,
         )
+        email_sent = True
     except Exception as exc:
         # Non-fatal: log the error but still save the analysis
         logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
 
     # ── 8. Save to DB ─────────────────────────────────────────────────────────
     try:
+        # Operator name for DB: real name from email if available, else agente field
+        operator_name_db = _extract_operator_name(operator_email) or campaign_info.get("agente", "")
+
         await _save_analysis(
             appointment_id=appointment_id,
             campaign_code=campaign_info["raw"],
@@ -222,9 +264,10 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             acuity_account=acuity_account,
             appointment_dt=appointment_dt,
             phone=phone,
-            sidial_call_id=sidial_call_id or "",
-            operator_name=campaign_info.get("agente", ""),
-            qualification_level=report.get("livello_qualificazione", "corretta"),
+            sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
+            operator_name=operator_name_db,
+            qualification_level=qualification_level,
+            email_sent=email_sent,
         )
     except Exception as exc:
         logger.error("[%s] DB save failed: %s", appointment_id, exc, exc_info=True)

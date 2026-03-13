@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% set active_page = "analyses" %}
+
+{% block title %}Analisi #{{ analysis.id }} — CallCoach Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Analisi #{{ analysis.id }}</h4>
+    <p class="text-muted small mb-0">
+      {{ analysis.campaign_code or "—" }} &mdash;
+      {% if analysis.appointment_datetime %}
+        {{ analysis.appointment_datetime.strftime('%d/%m/%Y %H:%M') }}
+      {% endif %}
+    </p>
+  </div>
+  <a href="/admin/ui/analyses" class="btn btn-outline-secondary btn-sm">← Torna alla lista</a>
+</div>
+
+{# ── Metadata ── #}
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold">Dati appuntamento</div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Campagna</div>
+        <code>{{ analysis.campaign_code or "—" }}</code>
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Operatore</div>
+        <strong>{{ analysis.operator_name or "—" }}</strong>
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Telefono cliente</div>
+        {{ analysis.client_phone or "—" }}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Data appuntamento</div>
+        {% if analysis.appointment_datetime %}
+          {{ analysis.appointment_datetime.strftime('%d/%m/%Y %H:%M') }}
+        {% else %}—{% endif %}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Account Acuity</div>
+        {{ analysis.acuity_account or "—" }}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Sidial Call ID</div>
+        <code class="small">{{ analysis.sidial_call_id or "—" }}</code>
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Qualificazione</div>
+        {% if analysis.qualification_level == 'buona' %}
+          <span class="badge bg-success">buona</span>
+        {% elif analysis.qualification_level == 'da_migliorare' %}
+          <span class="badge bg-warning text-dark">da migliorare</span>
+        {% elif analysis.qualification_level == 'inaccurata' %}
+          <span class="badge bg-danger">inaccurata</span>
+        {% else %}
+          <span class="text-muted">—</span>
+        {% endif %}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Email report</div>
+        {% if analysis.email_sent %}
+          <span class="text-success">✓ inviata</span>
+        {% else %}
+          <span class="text-muted">non inviata</span>
+        {% endif %}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Stato elaborazione</div>
+        {% if analysis.processing_status == 'completed' %}
+          <span class="badge bg-success">completed</span>
+        {% elif analysis.processing_status == 'error' %}
+          <span class="badge bg-danger">error</span>
+        {% else %}
+          <span class="badge bg-secondary">{{ analysis.processing_status }}</span>
+        {% endif %}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Creata il</div>
+        {{ analysis.created_at.strftime('%d/%m/%Y %H:%M:%S') }}
+      </div>
+    </div>
+
+    {% if analysis.error_message %}
+    <div class="alert alert-danger mt-3 mb-0">
+      <strong>Errore:</strong> {{ analysis.error_message }}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# ── HTML Report ── #}
+{% if analysis.report_html %}
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold d-flex justify-content-between">
+    <span>Report HTML</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="toggleReport()">Espandi / Comprimi</button>
+  </div>
+  <div class="card-body p-0" id="reportContainer">
+    <iframe id="reportFrame"
+            srcdoc="{{ analysis.report_html | e }}"
+            style="width:100%; border:none; min-height:600px;">
+    </iframe>
+  </div>
+</div>
+{% endif %}
+
+{# ── Transcript ── #}
+{% if analysis.transcript %}
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold">Trascrizione</div>
+  <div class="card-body" style="max-height:400px; overflow-y:auto;">
+    <pre class="mb-0" style="white-space:pre-wrap; font-size:13px; line-height:1.6;">{{ analysis.transcript }}</pre>
+  </div>
+</div>
+{% endif %}
+
+{# ── JSON Report (raw) ── #}
+{% if analysis.report_json %}
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold">JSON grezzo</div>
+  <div class="card-body" style="max-height:400px; overflow-y:auto;">
+    <pre class="mb-0" style="font-size:12px; line-height:1.5;">{{ analysis.report_json | tojson(indent=2) }}</pre>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleReport() {
+  const frame = document.getElementById('reportFrame');
+  frame.style.minHeight = frame.style.minHeight === '200px' ? '600px' : '200px';
+}
+</script>
+{% endblock %}

@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% set active_page = "analyses" %}
+
+{% block title %}Analisi — CallCoach Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Analisi</h4>
+    <p class="text-muted small mb-0">Ultime 100 analisi elaborate dal sistema.</p>
+  </div>
+</div>
+
+{% if analyses %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>#</th>
+          <th>Campagna</th>
+          <th>Operatore</th>
+          <th>Data appuntamento</th>
+          <th class="text-center">Qualificazione</th>
+          <th class="text-center">Email</th>
+          <th class="text-center">Stato</th>
+          <th>Creata</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in analyses %}
+        <tr>
+          <td class="text-muted small">{{ a.id }}</td>
+          <td><code class="small">{{ a.campaign_code or "—" }}</code></td>
+          <td>{{ a.operator_name or "<span class='text-muted'>—</span>" | safe }}</td>
+          <td class="text-muted small">
+            {% if a.appointment_datetime %}
+              {{ a.appointment_datetime.strftime('%d/%m/%Y %H:%M') }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-center">
+            {% if a.qualification_level == 'buona' %}
+              <span class="badge bg-success">buona</span>
+            {% elif a.qualification_level == 'da_migliorare' %}
+              <span class="badge bg-warning text-dark">da migliorare</span>
+            {% elif a.qualification_level == 'inaccurata' %}
+              <span class="badge bg-danger">inaccurata</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if a.email_sent %}
+              <span class="dot-ok" title="Email inviata">●</span>
+            {% else %}
+              <span class="dot-miss" title="Email non inviata">●</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if a.processing_status == 'completed' %}
+              <span class="badge bg-success">ok</span>
+            {% elif a.processing_status == 'error' %}
+              <span class="badge bg-danger" title="{{ a.error_message or '' }}">errore</span>
+            {% else %}
+              <span class="badge bg-secondary">{{ a.processing_status }}</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ a.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+          <td>
+            <a href="/admin/ui/analyses/{{ a.id }}" class="btn btn-sm btn-outline-secondary">Dettaglio</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="text-muted small mt-2">
+  <span class="dot-ok">●</span> = sì &nbsp;
+  <span class="dot-miss">●</span> = no
+</p>
+
+{% else %}
+<div class="card shadow-sm text-center py-5">
+  <div style="font-size:2rem">📊</div>
+  <p class="text-muted mt-2 mb-0">Nessuna analisi presente.</p>
+</div>
+{% endif %}
+{% endblock %}

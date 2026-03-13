@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% set active_page = "campaigns" %}
+
+{% block title %}Campagne — CallCoach Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Configurazioni campagne</h4>
+    <p class="text-muted small mb-0">
+      Il sistema usa il <strong>match per prefisso</strong>: un codice più specifico vince su uno
+      generico. Es. una riga <code>INTER</code> copre tutte le campagne INTER-*; aggiungere una riga
+      <code>INTER-CLI.-001</code> crea un'eccezione solo per quella campagna.
+    </p>
+  </div>
+  <a href="/admin/ui/campaigns/new" class="btn btn-dark">+ Nuova configurazione</a>
+</div>
+
+{% if campaigns %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Codice / Prefisso</th>
+          <th>Nome</th>
+          <th class="text-center">Script</th>
+          <th class="text-center">Qualificazione</th>
+          <th class="text-center">Info cliente</th>
+          <th class="text-center">Email</th>
+          <th class="text-center">Attiva</th>
+          <th>Aggiornata</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in campaigns %}
+        <tr>
+          <td>
+            <code class="fw-bold">{{ c.code }}</code>
+            <span class="badge-prefix ms-1">prefisso</span>
+          </td>
+          <td>{{ c.nome or "<span class='text-muted'>—</span>" | safe }}</td>
+          <td class="text-center">
+            {% if c.script %}
+              <span class="dot-ok" title="{{ c.script | length }} caratteri">●</span>
+            {% else %}
+              <span class="dot-miss">●</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if c.qualification_params %}
+              <span class="dot-ok" title="{{ c.qualification_params | length }} caratteri">●</span>
+            {% else %}
+              <span class="dot-miss">●</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if c.client_info %}
+              <span class="dot-ok" title="{{ c.client_info | length }} caratteri">●</span>
+            {% else %}
+              <span class="dot-miss">●</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if c.email_recipients %}
+              <span class="dot-ok" title="{{ c.email_recipients | join(', ') }}">
+                ● {{ c.email_recipients | length }}
+              </span>
+            {% else %}
+              <span class="dot-miss">●</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if c.active %}
+              <span class="badge bg-success">sì</span>
+            {% else %}
+              <span class="badge bg-secondary">no</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ c.updated_at.strftime('%d/%m/%Y') }}</td>
+          <td>
+            <a href="/admin/ui/campaigns/{{ c.id }}/edit"
+               class="btn btn-sm btn-outline-secondary">Modifica</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="text-muted small mt-2">
+  <span class="dot-ok">●</span> = campo compilato &nbsp;
+  <span class="dot-miss">●</span> = campo vuoto
+</p>
+
+{% else %}
+<div class="card shadow-sm text-center py-5">
+  <div style="font-size:2rem">📋</div>
+  <p class="text-muted mt-2 mb-3">Nessuna configurazione presente.</p>
+  <a href="/admin/ui/campaigns/new" class="btn btn-dark">Crea la prima configurazione</a>
+</div>
+{% endif %}
+
+{% endblock %}

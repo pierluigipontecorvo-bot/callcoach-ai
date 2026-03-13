@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # AI
     anthropic_api_key: str
+    anthropic_model: str = "claude-haiku-4-5-20251001"
 
     # Sidial CRM
     sidial_api_url: str = "https://effoncall.sidial.cloud/api.php"
@@ -34,11 +35,14 @@ class Settings(BaseSettings):
     # Whether to verify Acuity webhook HMAC signatures
     acuity_verify_webhook: bool = False
 
-    # Email Aruba
+    # Email — Aruba SMTP (legacy) or Resend API
     smtp_host: str = "smtps.aruba.it"
-    smtp_port: int = 465
-    smtp_user: str
-    smtp_password: str
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+
+    # Resend transactional email (preferred — bypasses Railway SMTP block)
+    resend_api_key: str = ""
 
     # Security
     secret_key: str

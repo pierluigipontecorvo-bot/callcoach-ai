@@ -45,10 +45,11 @@ app.add_middleware(
 )
 
 # ── Routers ────────────────────────────────────────────────────────────────────
-from routers import webhook, admin, analysis  # noqa: E402
+from routers import webhook, admin, admin_ui, analysis  # noqa: E402
 
 app.include_router(webhook.router)
 app.include_router(admin.router, prefix="/admin")
+app.include_router(admin_ui.router)          # prefix="/admin/ui" defined in router
 app.include_router(analysis.router, prefix="/analysis")
 
 

@@ -18,10 +18,12 @@ class Campaign(Base):
     province = Column(String(50))
     numeric_code = Column(String(20))
     is_multisede = Column(Boolean, default=False)
+    nome = Column(String(300))              # human-readable label, e.g. "Mailbox – tutte"
     script = Column(Text)
     qualification_params = Column(Text)
     client_info = Column(Text)
     email_recipients = Column(ARRAY(String))
+    notes = Column(Text)                   # internal notes
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
