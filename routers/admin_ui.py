@@ -426,11 +426,17 @@ async def appointments_list(
     appt_ids = [str(a["id"]) for a in all_appts]
     if appt_ids:
         ana_result = await db.execute(
-            select(Analysis.appointment_id, Analysis.processing_status, Analysis.id)
+            select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
+                   Analysis.progress, Analysis.step_message)
             .where(Analysis.appointment_id.in_(appt_ids))
         )
         analyses_map: dict[str, dict] = {
-            row.appointment_id: {"status": row.processing_status, "id": row.id}
+            row.appointment_id: {
+                "status": row.processing_status,
+                "id": row.id,
+                "progress": row.progress or 0,
+                "step_message": row.step_message or "",
+            }
             for row in ana_result.all()
         }
     else:

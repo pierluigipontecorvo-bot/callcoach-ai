@@ -63,11 +63,19 @@
               <span class="dot-miss" title="Email non inviata">●</span>
             {% endif %}
           </td>
-          <td class="text-center">
+          <td class="text-center" style="min-width:140px;">
             {% if a.processing_status == 'completed' %}
               <span class="badge bg-success">ok</span>
             {% elif a.processing_status == 'error' %}
               <span class="badge bg-danger" title="{{ a.error_message or '' }}">errore</span>
+            {% elif a.processing_status == 'processing' %}
+              <div style="font-size:10px; color:#666; margin-bottom:2px;">
+                {{ a.step_message or 'In corso...' }} {{ a.progress or 0 }}%
+              </div>
+              <div class="progress" style="height:6px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning"
+                     style="width:{{ a.progress or 0 }}%"></div>
+              </div>
             {% else %}
               <span class="badge bg-secondary">{{ a.processing_status }}</span>
             {% endif %}
@@ -93,5 +101,9 @@
   <div style="font-size:2rem">📊</div>
   <p class="text-muted mt-2 mb-0">Nessuna analisi presente.</p>
 </div>
+{% endif %}
+
+{% if analyses and analyses | selectattr("processing_status", "equalto", "processing") | list %}
+<script>setTimeout(() => window.location.reload(), 4000);</script>
 {% endif %}
 {% endblock %}

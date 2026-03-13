@@ -28,8 +28,40 @@ logger = logging.getLogger(__name__)
 
 # ── DB helpers (imported lazily to avoid circular imports at module load) ──────
 
+async def _create_processing_record(appointment_id: str, acuity_account: int) -> int:
+    """Crea subito un record Analysis con status=processing e ritorna l'id."""
+    from database import AsyncSessionLocal
+    from models import Analysis
+
+    async with AsyncSessionLocal() as session:
+        obj = Analysis(
+            appointment_id=str(appointment_id),
+            acuity_account=acuity_account,
+            processing_status="processing",
+            progress=0,
+            step_message="Avvio pipeline...",
+        )
+        session.add(obj)
+        await session.commit()
+        await session.refresh(obj)
+        return obj.id
+
+
+async def _update_progress(analysis_id: int, progress: int, message: str):
+    from database import AsyncSessionLocal
+    from models import Analysis
+
+    async with AsyncSessionLocal() as session:
+        obj = await session.get(Analysis, analysis_id)
+        if obj:
+            obj.progress = progress
+            obj.step_message = message
+            await session.commit()
+
+
 async def _save_analysis(
     *,
+    analysis_id: int,
     appointment_id: str,
     campaign_code: str,
     transcript: str,
@@ -47,38 +79,44 @@ async def _save_analysis(
     from models import Analysis
 
     async with AsyncSessionLocal() as session:
-        obj = Analysis(
-            appointment_id=appointment_id,
-            campaign_code=campaign_code,
-            appointment_datetime=appointment_dt,
-            client_phone=phone,
-            operator_name=operator_name,
-            acuity_account=acuity_account,
-            acuity_label="PRESO",
-            sidial_call_id=sidial_call_id,
-            transcript=transcript,
-            qualification_level=qualification_level,
-            report_json=report,
-            report_html=html_report,
-            email_sent=email_sent,
-            processing_status="completed",
-        )
-        session.add(obj)
+        obj = await session.get(Analysis, analysis_id)
+        if obj is None:
+            obj = Analysis(appointment_id=appointment_id, acuity_account=acuity_account)
+            session.add(obj)
+        obj.campaign_code = campaign_code
+        obj.appointment_datetime = appointment_dt
+        obj.client_phone = phone
+        obj.operator_name = operator_name
+        obj.acuity_account = acuity_account
+        obj.acuity_label = "PRESO"
+        obj.sidial_call_id = sidial_call_id
+        obj.transcript = transcript
+        obj.qualification_level = qualification_level
+        obj.report_json = report
+        obj.report_html = html_report
+        obj.email_sent = email_sent
+        obj.processing_status = "completed"
+        obj.progress = 100
+        obj.step_message = "Completata"
         await session.commit()
 
 
-async def _save_error(appointment_id: str, error_msg: str, acuity_account: int):
+async def _save_error(analysis_id: int | None, appointment_id: str, error_msg: str, acuity_account: int):
     from database import AsyncSessionLocal
     from models import Analysis
 
     async with AsyncSessionLocal() as session:
-        obj = Analysis(
-            appointment_id=str(appointment_id),
-            acuity_account=acuity_account,
-            processing_status="error",
-            error_message=error_msg[:2000],
-        )
-        session.add(obj)
+        obj = await session.get(Analysis, analysis_id) if analysis_id else None
+        if obj is None:
+            obj = Analysis(
+                appointment_id=str(appointment_id),
+                acuity_account=acuity_account,
+            )
+            session.add(obj)
+        obj.processing_status = "error"
+        obj.progress = 0
+        obj.step_message = "Errore"
+        obj.error_message = error_msg[:2000]
         await session.commit()
 
 
@@ -102,14 +140,18 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     appointment_id = str(appointment_data.get("id", "unknown"))
     logger.info("[%s] Pipeline started (account=%d)", appointment_id, acuity_account)
 
+    # Crea subito il record con status=processing (visibile nella UI)
+    analysis_id = await _create_processing_record(appointment_id, acuity_account)
+
     # ── 1. Parse campaign code ────────────────────────────────────────────────
+    await _update_progress(analysis_id, 5, "Verifica codice campagna...")
     appointment_type = appointment_data.get("type", "")
     campaign_info = parse_campaign_code(appointment_type)
 
     if not campaign_info.get("valid"):
         msg = f"Unparseable campaign code: {appointment_type!r}"
         logger.warning("[%s] %s", appointment_id, msg)
-        await _save_error(appointment_id, msg, acuity_account)
+        await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
     logger.info(
@@ -131,6 +173,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         logger.info("[%s] No operator email found in appointment data", appointment_id)
 
     # ── 2. Find & download ALL recordings for this contact ────────────────────
+    await _update_progress(analysis_id, 10, "Ricerca registrazione su Sidial...")
     try:
         recordings = await find_and_download_all_recordings(
             phone=phone,
@@ -139,20 +182,23 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     except Exception as exc:
         msg = f"Sidial error: {exc}"
         logger.error("[%s] %s", appointment_id, msg, exc_info=True)
-        await _save_error(appointment_id, msg, acuity_account)
+        await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
     if not recordings:
         msg = "Nessuna registrazione trovata su Sidial"
         logger.error("[%s] %s", appointment_id, msg)
-        await _save_error(appointment_id, msg, acuity_account)
+        await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
     logger.info("[%s] %d registrazioni trovate", appointment_id, len(recordings))
+    await _update_progress(analysis_id, 20, f"{len(recordings)} registrazione/i trovata/e, trascrizione in corso...")
 
     # ── 3. Transcribe all recordings and concatenate ───────────────────────────
     transcript_parts = []
     for idx, (call_id, audio_bytes) in enumerate(recordings, start=1):
+        pct = 20 + int(40 * (idx - 1) / len(recordings))
+        await _update_progress(analysis_id, pct, f"Trascrizione chiamata {idx}/{len(recordings)}...")
         try:
             logger.info(
                 "[%s] Trascrizione chiamata %d/%d (call_id=%s, %d bytes) …",
@@ -169,6 +215,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     logger.info("[%s] Trascrizione totale: %d caratteri", appointment_id, len(transcript))
 
     # ── 4. Load campaign config + global documents ────────────────────────────
+    await _update_progress(analysis_id, 60, "Caricamento configurazione campagna...")
     campaign_db = None
     global_doc = None
     try:
@@ -177,10 +224,6 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     except Exception as exc:
         logger.warning("[%s] Could not fetch campaign config: %s", appointment_id, exc)
 
-    # Merge global docs with campaign-specific docs.
-    # Rules:
-    #   script / client_info : global first, then campaign-specific (separated)
-    #   qualification_params : campaign wins; global only as fallback (no merge)
     def _merge_text(global_val: str | None, campaign_val: str | None) -> str | None:
         parts = [p.strip() for p in [global_val, campaign_val] if p and p.strip()]
         return "\n\n---\n\n".join(parts) if parts else None
@@ -193,13 +236,13 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         global_doc.client_info if global_doc else None,
         campaign_db.client_info if campaign_db else None,
     )
-    # qualification_params: campaign-specific wins; fall back to global if absent
     merged_qual = (
         (campaign_db.qualification_params if campaign_db else None)
         or (global_doc.qualification_params if global_doc else None)
     )
 
     # ── 5. Claude analysis ────────────────────────────────────────────────────
+    await _update_progress(analysis_id, 65, "Analisi AI in corso...")
     try:
         report = await analyze_call(
             transcript=transcript,
@@ -212,10 +255,11 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     except Exception as exc:
         msg = f"Claude analysis failed: {exc}"
         logger.error("[%s] %s", appointment_id, msg, exc_info=True)
-        await _save_error(appointment_id, msg, acuity_account)
+        await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
     # ── 6. HTML report ────────────────────────────────────────────────────────
+    await _update_progress(analysis_id, 85, "Generazione report HTML...")
     appointment_info = {
         "datetime": appointment_data.get("datetime", ""),
         "phone": phone,
@@ -226,50 +270,36 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 7. Email ──────────────────────────────────────────────────────────────
     from config import settings as cfg
 
-    # Extract qualification level from new report format (rating 1-3)
     _rating_to_level = {1: "inaccurata", 2: "da_migliorare", 3: "buona"}
     qual_rating = report.get("qualificazione", {}).get("rating", 2)
     qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
 
-    # Recipients: campaign config DB + operator (from Acuity) + mandatory inoltro.
-    # The only Acuity address ever used is op.XX.nome@effoncall.com; no other
-    # @effoncall.com / @effoncall.it addresses from Acuity are ever added.
     _INOLTRO = "inoltra@effoncall.com"
-
     recipients: list[str] = []
     if campaign_db and campaign_db.email_recipients:
         recipients = list(campaign_db.email_recipients)
     if not recipients:
         recipients = [cfg.fallback_email]
-
-    # Add operator address first (only the op.XX.nome@ one — already validated)
     if operator_email and operator_email not in recipients:
         recipients.insert(0, operator_email)
-
-    # Always forward to the inoltro address (deduplicated)
     if _INOLTRO not in recipients:
         recipients.append(_INOLTRO)
 
     # EMAIL TEMPORANEAMENTE DISABILITATA — bug in corso di risoluzione
     email_sent = False
     # try:
-    #     await send_analysis_report(
-    #         recipients=recipients,
-    #         html_content=html_report,
-    #         operator_name=campaign_info.get("agente", "Operatore"),
-    #         qualification_level=qualification_level,
-    #         appointment_datetime=appointment_dt_str,
-    #     )
+    #     await send_analysis_report(...)
     #     email_sent = True
     # except Exception as exc:
     #     logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
 
     # ── 8. Save to DB ─────────────────────────────────────────────────────────
+    await _update_progress(analysis_id, 95, "Salvataggio...")
     try:
-        # Operator name for DB: real name from email if available, else agente field
         operator_name_db = _extract_operator_name(operator_email) or campaign_info.get("agente", "")
 
         await _save_analysis(
+            analysis_id=analysis_id,
             appointment_id=appointment_id,
             campaign_code=campaign_info["raw"],
             transcript=transcript,

@@ -114,7 +114,7 @@
           </td>
 
           {# Analisi #}
-          <td>
+          <td style="min-width:120px;">
             {% if a.analysis %}
               {% if a.analysis.status == "completed" %}
                 <a href="/admin/ui/analyses/{{ a.analysis.id }}"
@@ -126,10 +126,14 @@
                    class="badge bg-danger text-decoration-none" style="font-size:11px;">
                   ✗ Errore
                 </a>
+              {% elif a.analysis.status == "processing" %}
+                <div style="font-size:10px; color:#888;">{{ a.analysis.step_message or 'In corso...' }} {{ a.analysis.progress }}%</div>
+                <div class="progress" style="height:5px; margin-top:2px;">
+                  <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning"
+                       style="width:{{ a.analysis.progress }}%"></div>
+                </div>
               {% else %}
-                <span class="badge bg-warning text-dark" style="font-size:11px;">
-                  ⏳ {{ a.analysis.status }}
-                </span>
+                <span class="badge bg-secondary" style="font-size:11px;">⏳ {{ a.analysis.status }}</span>
               {% endif %}
             {% else %}
               <span class="text-muted" style="font-size:11px;">—</span>
@@ -175,4 +179,7 @@
 </div>
 {% endif %}
 
+{% if appointments and appointments | selectattr("analysis") | selectattr("analysis.status", "equalto", "processing") | list %}
+<script>setTimeout(() => window.location.reload(), 4000);</script>
+{% endif %}
 {% endblock %}

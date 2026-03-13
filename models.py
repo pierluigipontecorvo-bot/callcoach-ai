@@ -58,6 +58,8 @@ class Analysis(Base):
     email_sent = Column(Boolean, default=False)
     email_sent_at = Column(DateTime(timezone=True))
     processing_status = Column(String(50), default="pending")
+    progress = Column(Integer, default=0)
+    step_message = Column(String(300))
     error_message = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
