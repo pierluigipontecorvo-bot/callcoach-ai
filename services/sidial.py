@@ -239,7 +239,7 @@ async def find_and_download_all_recordings(
     campaign_code: Optional[str] = None,
     appointment_dt: Optional[datetime] = None,   # ignorato, mantenuto per compatibilità
     lookback_days: int = 30,
-    max_recs: int = 3,
+    max_recs: int = 20,
 ) -> list[Tuple[str, bytes]]:
     """
     Trova e scarica le registrazioni degli ultimi lookback_days giorni per un
@@ -318,9 +318,11 @@ async def find_and_download_all_recordings(
     ]
 
     if recent:
-        recs_to_download = recent[-max_recs:]   # le max_recs più recenti
+        # Tutte le registrazioni recenti in ordine cronologico (più vecchia → più recente)
+        # Cap a max_recs come valvola di sicurezza (default 20)
+        recs_to_download = recent[:max_recs]
         logger.info(
-            "Sidial: %d registrazioni negli ultimi %d giorni (su %d totali) — scarico le ultime %d",
+            "Sidial: %d registrazioni negli ultimi %d giorni (su %d totali) — scarico tutte (%d)",
             len(recent), lookback_days, len(all_recs_sorted), len(recs_to_download),
         )
     else:
