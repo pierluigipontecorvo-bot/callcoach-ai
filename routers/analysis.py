@@ -100,7 +100,7 @@ async def upload_and_analyze(
         "phone": phone,
         "id": appointment_id,
     }
-    html_report = generate_html_report(report, appointment_info, campaign_info)
+    html_report = generate_html_report(report, appointment_info, campaign_info, operator_name="")
 
     # Save to DB
     from database import AsyncSessionLocal
@@ -113,7 +113,7 @@ async def upload_and_analyze(
             campaign_code=campaign_info["raw"],
             appointment_datetime=parse_iso_datetime(appointment_datetime),
             client_phone=phone,
-            operator_name=campaign_info.get("agente", ""),
+            operator_name="",  # upload route has no operator email; agente ≠ operatore
             acuity_account=acuity_account,
             acuity_label="UPLOAD",
             transcript=transcript,

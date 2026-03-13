@@ -142,6 +142,7 @@ def generate_html_report(
     report: dict,
     appointment_info: dict,
     campaign_info: dict,
+    operator_name: str = "",
     model_name: str = "claude-haiku-4-5-20251001",
 ) -> str:
     """Render the analysis report as a self-contained HTML email."""
@@ -155,7 +156,7 @@ def generate_html_report(
     rating_colors = {1: "#e74c3c", 2: "#e67e22", 3: "#27ae60"}
     accent_color  = rating_colors.get(qual_rating, "#2980b9")
 
-    operator_name  = campaign_info.get("agente", "N/A")
+    operator_name  = operator_name or "N/A"
     raw_code       = campaign_info.get("raw", "N/A")
     campaign_client = campaign_info.get("cliente", "N/A")
     ragione_sociale = report.get("ragione_sociale", "N/A")

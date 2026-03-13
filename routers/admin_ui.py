@@ -514,13 +514,10 @@ async def appointments_list(
         # In-memory longest-prefix match
         campaign_cfg = _match_campaign_prefix(campaign_code, all_campaigns) if campaign_code else None
 
-        # Operator — prefer email pattern, fall back to campaign code agente
+        # Operator — identified via op.XX.nome@effoncall.com only.
+        # campaign_info["agente"] is the commercial agent, not the call operator.
         op_email = find_operator_email(a)
-        if op_email:
-            op_display = format_operator_display(op_email)
-        else:
-            agente = (parsed.get("agente") or "") if parsed and parsed.get("valid") else ""
-            op_display = agente.upper() if agente else "—"
+        op_display = format_operator_display(op_email) if op_email else "—"
 
         # Ragione sociale — look in form fields first
         ragione = _extract_ragione_sociale(a)

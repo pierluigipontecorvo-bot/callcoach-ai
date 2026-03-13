@@ -192,8 +192,9 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         logger.info("[%s] No operator email found in appointment data", appointment_id)
 
     # Save identifying info immediately so the UI shows it during processing
-    # Prefer the agent name from the campaign code; fall back to Acuity email extraction
-    _initial_op_name = campaign_info.get("agente") or _extract_operator_name(operator_email) or ""
+    # Operator = person who made the call, identified via op.XX.nome@effoncall.com only.
+    # campaign_info["agente"] is the sales agent (commerciale), NOT the call operator.
+    _initial_op_name = _extract_operator_name(operator_email) or ""
     await _update_initial_info(
         analysis_id,
         campaign_code=campaign_info["raw"],
@@ -294,7 +295,10 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         "phone": phone,
         "id": appointment_id,
     }
-    html_report = generate_html_report(report, appointment_info, campaign_info)
+    # operator_name_db is computed below (after step 6) — pass it to the report
+    # so the HTML and DB are always in sync
+    _report_operator = _extract_operator_name(operator_email) or ""
+    html_report = generate_html_report(report, appointment_info, campaign_info, operator_name=_report_operator)
 
     # ── 7. Email ──────────────────────────────────────────────────────────────
     from config import settings as cfg
@@ -325,9 +329,9 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 8. Save to DB ─────────────────────────────────────────────────────────
     await _update_progress(analysis_id, 95, "Salvataggio...")
     try:
-        # Prefer the agent name from the campaign code; fall back to Acuity email extraction.
-        # This ensures the DB record matches what generate_html_report() puts in the HTML.
-        operator_name_db = campaign_info.get("agente") or _extract_operator_name(operator_email) or ""
+        # Operator = caller identified via op.XX.nome@effoncall.com only.
+        # campaign_info["agente"] is the commercial agent, not the call operator.
+        operator_name_db = _extract_operator_name(operator_email) or ""
 
         await _save_analysis(
             analysis_id=analysis_id,
