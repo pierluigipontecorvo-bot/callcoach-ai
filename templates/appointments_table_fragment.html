@@ -43,10 +43,10 @@
             {% if not a.campaign_cfg %}
               {% if a.campaign_inactive %}
                 <span class="ms-1 text-secondary"
-                      title="Configurazione trovata ma inattiva — vai in Campagne e attivala">⊘</span>
+                      title="Configurazione trovata ma inattiva — vai in Campagne e attivala&#10;Tipo Acuity: {{ a.raw_acuity_type }}">⊘</span>
               {% else %}
                 <span class="ms-1 text-warning"
-                      title="Nessuna configurazione trovata per questa campagna">⚠</span>
+                      title="Nessuna configurazione trovata per questa campagna&#10;Tipo Acuity: {{ a.raw_acuity_type }}">⚠</span>
               {% endif %}
             {% endif %}
           </td>

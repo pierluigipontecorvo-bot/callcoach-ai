@@ -532,8 +532,10 @@ async def appointments_data(
         select(Campaign).where(Campaign.code != GLOBAL_CODE)
     )
     _all_camps = list(camp_result.scalars().all())
-    all_campaigns: dict[str, Campaign] = {c.code: c for c in _all_camps if c.active}
-    all_campaigns_inactive: dict[str, Campaign] = {c.code: c for c in _all_camps if not c.active}
+    # Normalise keys: strip + uppercase so DB entries with accidental whitespace
+    # or wrong casing (e.g. "AVANZ-AVI-0000 ") still match correctly.
+    all_campaigns: dict[str, Campaign] = {c.code.strip().upper(): c for c in _all_camps if c.active}
+    all_campaigns_inactive: dict[str, Campaign] = {c.code.strip().upper(): c for c in _all_camps if not c.active}
 
     logger.info(
         "appointments/data: %d active campaigns loaded: %s",
@@ -575,10 +577,12 @@ async def appointments_data(
         ) if campaign_code else False
 
         if campaign_code and not campaign_cfg:
-            logger.info(
-                "No active campaign match for code=%r  inactive_match=%s",
+            logger.warning(
+                "No active campaign match | raw_acuity_type=%r | campaign_code=%r | inactive=%s | active_codes=%s",
+                a.get("type", ""),
                 campaign_code,
                 campaign_inactive,
+                sorted(all_campaigns.keys()),
             )
 
         op_display = get_operator_display(a)
@@ -603,6 +607,7 @@ async def appointments_data(
             "account": a["_account"],
             "dt_display": dt_display,
             "campaign_code": campaign_code or a.get("type", "—"),
+            "raw_acuity_type": a.get("type", ""),   # exact string from Acuity API
             "campaign_cfg": campaign_cfg,
             "campaign_inactive": campaign_inactive,
             "ragione": ragione,
@@ -785,10 +790,14 @@ def _extract_docx(data: bytes) -> str:
 # ── Private helpers ───────────────────────────────────────────────────────────
 
 def _match_campaign_prefix(campaign_code: str, all_campaigns: dict) -> Optional[Campaign]:
-    """In-memory longest-prefix match (mirrors campaign_db.get_campaign_by_code)."""
+    """
+    In-memory longest-prefix match (mirrors campaign_db.get_campaign_by_code).
+    Both candidates and dict keys are normalised to UPPER-STRIP so mismatches
+    caused by accidental whitespace or lowercase DB entries are avoided.
+    """
     if not campaign_code:
         return None
-    tokens = [t.strip() for t in campaign_code.strip().split("-") if t.strip()]
+    tokens = [t.strip().upper() for t in campaign_code.strip().split("-") if t.strip()]
     for i in range(len(tokens), 0, -1):
         candidate = "-".join(tokens[:i])
         if candidate in all_campaigns:
