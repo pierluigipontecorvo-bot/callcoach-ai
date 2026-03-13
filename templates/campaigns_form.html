@@ -1,9 +1,13 @@
 {% extends "base.html" %}
-{% set active_page = "campaigns" %}
 
 {% block title %}
-  {% if campaign %}Modifica — {{ campaign.code }}{% else %}Nuova configurazione{% endif %}
-  — CallCoach Admin
+  {% if is_global %}
+    Documenti Globali — CallCoach Admin
+  {% elif campaign %}
+    Modifica — {{ campaign.code }} — CallCoach Admin
+  {% else %}
+    Nuova configurazione — CallCoach Admin
+  {% endif %}
 {% endblock %}
 
 {% block content %}
@@ -12,25 +16,31 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
   <div>
     <h4 class="fw-bold mb-0">
-      {% if campaign %}Modifica configurazione{% else %}Nuova configurazione{% endif %}
+      {% if is_global %}
+        Documenti Globali
+      {% elif campaign %}
+        Modifica configurazione
+      {% else %}
+        Nuova configurazione
+      {% endif %}
     </h4>
-    {% if campaign %}
+    {% if is_global %}
+      <p class="text-muted small mb-0">
+        Documenti validi per <strong>tutte</strong> le campagne, indipendentemente dal tipo.
+        Script e info cliente vengono uniti a quelli specifici della campagna.
+      </p>
+    {% elif campaign %}
       <p class="text-muted small mb-0">Codice: <code class="fw-bold">{{ campaign.code }}</code></p>
     {% endif %}
   </div>
   <a href="/admin/ui/campaigns" class="btn btn-outline-secondary btn-sm">← Torna alla lista</a>
 </div>
 
-{% if flash_err %}
-<div class="alert alert-danger alert-dismissible fade show">
-  {{ flash_err }}
-  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-</div>
-{% endif %}
+<form method="post"
+      action="{% if is_global %}/admin/ui/global{% elif campaign %}/admin/ui/campaigns/{{ campaign.id }}/edit{% else %}/admin/ui/campaigns/new{% endif %}">
 
-<form method="post" action="{% if campaign %}/admin/ui/campaigns/{{ campaign.id }}/edit{% else %}/admin/ui/campaigns/new{% endif %}">
-
-  {# ── Identificazione ── #}
+  {# ── Identificazione (solo per campagne specifiche) ── #}
+  {% if not is_global %}
   <div class="card shadow-sm mb-4">
     <div class="card-header fw-semibold">Identificazione</div>
     <div class="card-body">
@@ -39,7 +49,6 @@
         <div class="col-md-4">
           <label class="form-label fw-semibold">Codice / Prefisso <span class="text-danger">*</span></label>
           {% if campaign %}
-            {# Readonly in edit mode #}
             <input type="text" class="form-control font-monospace" value="{{ campaign.code }}" readonly disabled>
             <div class="form-text">Il codice non può essere modificato dopo la creazione.</div>
           {% else %}
@@ -77,74 +86,115 @@
       </div>
     </div>
   </div>
+  {% endif %}
 
   {# ── Documentazione AI ── #}
   <div class="card shadow-sm mb-4">
     <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
-      <span>Documentazione per l'AI</span>
-      <span class="text-muted small fw-normal">Questi campi vengono iniettati nel prompt di analisi</span>
+      <span>Documentazione per l'AI{% if is_global %} <span class="badge ms-2" style="background:#eef0f5;color:#405080;font-size:11px;font-weight:600;letter-spacing:.3px;">GLOBALE</span>{% endif %}</span>
+      <span class="text-muted small fw-normal">Iniettati nel prompt di analisi</span>
     </div>
     <div class="card-body">
 
+      {# ── Script ── #}
       <div class="mb-4">
-        <label class="form-label fw-semibold">
-          Script di vendita
-          <span class="field-status text-muted ms-2">
-            {% if campaign and campaign.script %}
-              <span class="dot-ok">●</span> {{ campaign.script | length }} caratteri
-            {% else %}
-              <span class="dot-miss">●</span> vuoto
-            {% endif %}
-          </span>
-        </label>
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label fw-semibold mb-0">
+            Script di vendita
+            <span class="field-status text-muted ms-2">
+              {% if campaign and campaign.script %}
+                <span class="dot-ok">●</span> {{ campaign.script | length }} caratteri
+              {% else %}
+                <span class="dot-miss">●</span> vuoto
+              {% endif %}
+            </span>
+          </label>
+          <button type="button" class="btn btn-outline-secondary upload-btn"
+                  data-target="script"
+                  onclick="document.getElementById('file_script').click()">
+            📎 Carica file
+          </button>
+          <input type="file" id="file_script" class="d-none"
+                 accept=".pdf,.doc,.docx,.txt"
+                 onchange="uploadToField(this, 'script')">
+        </div>
         <textarea name="script" class="form-control textarea-doc doc-field" rows="10"
                   placeholder="Incolla qui lo script di vendita completo usato dagli operatori…">{{ campaign.script or (form_data.script if form_data else '') }}</textarea>
         <div class="form-text">
           L'AI confronterà la telefonata con questo script per valutare la fedeltà dell'operatore.
+          {% if is_global %} — <strong>Globale:</strong> viene unito allo script specifico della campagna (prima il globale).{% endif %}
         </div>
       </div>
 
+      {# ── Parametri di qualificazione ── #}
       <div class="mb-4">
-        <label class="form-label fw-semibold">
-          Parametri di qualificazione
-          <span class="field-status text-muted ms-2">
-            {% if campaign and campaign.qualification_params %}
-              <span class="dot-ok">●</span> {{ campaign.qualification_params | length }} caratteri
-            {% else %}
-              <span class="dot-miss">●</span> vuoto
-            {% endif %}
-          </span>
-        </label>
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label fw-semibold mb-0">
+            Parametri di qualificazione
+            <span class="field-status text-muted ms-2">
+              {% if campaign and campaign.qualification_params %}
+                <span class="dot-ok">●</span> {{ campaign.qualification_params | length }} caratteri
+              {% else %}
+                <span class="dot-miss">●</span> vuoto
+              {% endif %}
+            </span>
+          </label>
+          <button type="button" class="btn btn-outline-secondary upload-btn"
+                  data-target="qualification_params"
+                  onclick="document.getElementById('file_qual').click()">
+            📎 Carica file
+          </button>
+          <input type="file" id="file_qual" class="d-none"
+                 accept=".pdf,.doc,.docx,.txt"
+                 onchange="uploadToField(this, 'qualification_params')">
+        </div>
         <textarea name="qualification_params" class="form-control textarea-doc doc-field" rows="8"
                   placeholder="Elenca i parametri da qualificare, uno per riga o in formato libero…">{{ campaign.qualification_params or (form_data.qualification_params if form_data else '') }}</textarea>
         <div class="form-text">
           I parametri che l'operatore deve raccogliere dal cliente durante la chiamata.
-          Se vuoto, l'AI non valuterà la qualificazione.
+          {% if is_global %}
+            — <strong>Globale:</strong> usato come fallback se la campagna non ha parametri propri (non si sovrappone).
+          {% else %}
+            Se vuoto, l'AI usa i parametri globali come fallback.
+          {% endif %}
         </div>
       </div>
 
+      {# ── Info cliente ── #}
       <div class="mb-0">
-        <label class="form-label fw-semibold">
-          Info cliente / Contesto campagna
-          <span class="field-status text-muted ms-2">
-            {% if campaign and campaign.client_info %}
-              <span class="dot-ok">●</span> {{ campaign.client_info | length }} caratteri
-            {% else %}
-              <span class="dot-miss">●</span> vuoto
-            {% endif %}
-          </span>
-        </label>
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label fw-semibold mb-0">
+            Info cliente / Contesto campagna
+            <span class="field-status text-muted ms-2">
+              {% if campaign and campaign.client_info %}
+                <span class="dot-ok">●</span> {{ campaign.client_info | length }} caratteri
+              {% else %}
+                <span class="dot-miss">●</span> vuoto
+              {% endif %}
+            </span>
+          </label>
+          <button type="button" class="btn btn-outline-secondary upload-btn"
+                  data-target="client_info"
+                  onclick="document.getElementById('file_client').click()">
+            📎 Carica file
+          </button>
+          <input type="file" id="file_client" class="d-none"
+                 accept=".pdf,.doc,.docx,.txt"
+                 onchange="uploadToField(this, 'client_info')">
+        </div>
         <textarea name="client_info" class="form-control textarea-doc doc-field" rows="6"
                   placeholder="Contesto sul cliente, sul prodotto/servizio venduto, sul settore…">{{ campaign.client_info or (form_data.client_info if form_data else '') }}</textarea>
         <div class="form-text">
           Informazioni di contesto che aiutano l'AI a interpretare meglio la telefonata.
+          {% if is_global %} — <strong>Globale:</strong> viene unito alle info specifiche della campagna (prima il globale).{% endif %}
         </div>
       </div>
 
     </div>
   </div>
 
-  {# ── Destinatari email ── #}
+  {# ── Destinatari email (solo per campagne specifiche, non per global) ── #}
+  {% if not is_global %}
   <div class="card shadow-sm mb-4">
     <div class="card-header fw-semibold">Destinatari email del report</div>
     <div class="card-body">
@@ -161,10 +211,12 @@
       <textarea name="email_recipients_raw" class="form-control doc-field" rows="4"
                 placeholder="Un indirizzo per riga:&#10;mario.rossi@esempio.it&#10;giulia.bianchi@esempio.it">{% if campaign and campaign.email_recipients %}{{ campaign.email_recipients | join('\n') }}{% elif form_data %}{{ form_data.email_recipients_raw }}{% endif %}</textarea>
       <div class="form-text">
-        Un indirizzo email per riga. Se vuoto, il report verrà inviato all'indirizzo di fallback configurato.
+        Un indirizzo email per riga. Se vuoto, il report verrà inviato all'indirizzo di fallback.
+        <code>inoltra@effoncall.com</code> viene sempre aggiunto automaticamente.
       </div>
     </div>
   </div>
+  {% endif %}
 
   {# ── Note interne ── #}
   <div class="card shadow-sm mb-4">
@@ -180,12 +232,18 @@
   <div class="d-flex gap-2 justify-content-between align-items-center mb-5">
     <div class="d-flex gap-2">
       <button type="submit" class="btn btn-dark px-4">
-        {% if campaign %}💾 Salva modifiche{% else %}✅ Crea configurazione{% endif %}
+        {% if is_global %}
+          💾 Salva documenti globali
+        {% elif campaign %}
+          💾 Salva modifiche
+        {% else %}
+          ✅ Crea configurazione
+        {% endif %}
       </button>
       <a href="/admin/ui/campaigns" class="btn btn-outline-secondary">Annulla</a>
     </div>
 
-    {% if campaign %}
+    {% if campaign and not is_global %}
     <form method="post" action="/admin/ui/campaigns/{{ campaign.id }}/delete"
           onsubmit="return confirm('Eliminare la configurazione «{{ campaign.code }}»? Questa azione non può essere annullata.')">
       <button type="submit" class="btn btn-outline-danger btn-sm">🗑 Elimina</button>
@@ -194,10 +252,65 @@
   </div>
 
 </form>
+
+{# ── Upload toast notification ── #}
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index:1100;">
+  <div id="uploadToast" class="toast align-items-center border-0" role="alert">
+    <div class="d-flex">
+      <div class="toast-body fw-semibold" id="uploadToastMsg" style="font-size:13px;"></div>
+      <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
 <style>
   .textarea-doc { min-height: 160px; resize: vertical; }
+  .upload-btn   { font-size: 11px; padding: 3px 10px; line-height: 1.6; white-space: nowrap; }
 </style>
+<script>
+async function uploadToField(inputEl, fieldName) {
+  const file = inputEl.files[0];
+  if (!file) return;
+
+  const btn = document.querySelector(`.upload-btn[data-target="${fieldName}"]`);
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '⏳ Estrazione…';
+  btn.disabled = true;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch('/admin/ui/upload-extract', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (data.error) {
+      showToast('❌ ' + data.error, 'danger');
+      btn.innerHTML = originalHtml;
+    } else {
+      document.querySelector(`textarea[name="${fieldName}"]`).value = data.text;
+      const chars = data.chars.toLocaleString('it-IT');
+      btn.innerHTML = '✓ ' + data.filename.replace(/^(.{22}).*(\..{1,4})$/, '$1…$2');
+      showToast('✅ Caricato: ' + data.filename + ' (' + chars + ' car.)', 'success');
+    }
+  } catch (_) {
+    showToast('❌ Errore di rete. Riprova.', 'danger');
+    btn.innerHTML = originalHtml;
+  } finally {
+    btn.disabled = false;
+    inputEl.value = '';
+  }
+}
+
+function showToast(msg, type) {
+  const el  = document.getElementById('uploadToast');
+  const msg_el = document.getElementById('uploadToastMsg');
+  el.className = 'toast align-items-center border-0 text-bg-' + type;
+  msg_el.textContent = msg;
+  bootstrap.Toast.getOrCreateInstance(el, { delay: 4500 }).show();
+}
+</script>
 {% endblock %}

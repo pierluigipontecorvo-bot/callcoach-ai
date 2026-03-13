@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from services.acuity import check_webhook_signature, get_appointment, should_analyze
 from services.ai_analysis import _extract_operator_name, analyze_call
-from services.campaign_db import get_campaign_by_code
+from services.campaign_db import get_campaign_by_code, get_global_campaign
 from services.campaign_parser import parse_campaign_code
 from services.email_service import generate_html_report, send_analysis_report
 from services.sidial import find_and_download_all_recordings
@@ -191,21 +191,45 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     transcript = "\n\n".join(transcript_parts)
     logger.info("[%s] Trascrizione totale: %d caratteri", appointment_id, len(transcript))
 
-    # ── 4. Load campaign config ───────────────────────────────────────────────
+    # ── 4. Load campaign config + global documents ────────────────────────────
     campaign_db = None
+    global_doc = None
     try:
         campaign_db = await get_campaign_by_code(campaign_info["raw"])
+        global_doc  = await get_global_campaign()
     except Exception as exc:
         logger.warning("[%s] Could not fetch campaign config: %s", appointment_id, exc)
+
+    # Merge global docs with campaign-specific docs.
+    # Rules:
+    #   script / client_info : global first, then campaign-specific (separated)
+    #   qualification_params : campaign wins; global only as fallback (no merge)
+    def _merge_text(global_val: str | None, campaign_val: str | None) -> str | None:
+        parts = [p.strip() for p in [global_val, campaign_val] if p and p.strip()]
+        return "\n\n---\n\n".join(parts) if parts else None
+
+    merged_script = _merge_text(
+        global_doc.script if global_doc else None,
+        campaign_db.script if campaign_db else None,
+    )
+    merged_client_info = _merge_text(
+        global_doc.client_info if global_doc else None,
+        campaign_db.client_info if campaign_db else None,
+    )
+    # qualification_params: campaign-specific wins; fall back to global if absent
+    merged_qual = (
+        (campaign_db.qualification_params if campaign_db else None)
+        or (global_doc.qualification_params if global_doc else None)
+    )
 
     # ── 5. Claude analysis ────────────────────────────────────────────────────
     try:
         report = await analyze_call(
             transcript=transcript,
             campaign_info=campaign_info,
-            script=campaign_db.script if campaign_db else None,
-            qualification_params=campaign_db.qualification_params if campaign_db else None,
-            client_info=campaign_db.client_info if campaign_db else None,
+            script=merged_script,
+            qualification_params=merged_qual,
+            client_info=merged_client_info,
             operator_email=operator_email,
         )
     except Exception as exc:
@@ -230,11 +254,19 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     qual_rating = report.get("qualificazione", {}).get("rating", 2)
     qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
 
+    # Recipients: ONLY from campaign config (never from Acuity data).
+    # Always include the mandatory forwarding address.
+    _INOLTRO = "inoltra@effoncall.com"
+
     recipients: list[str] = []
     if campaign_db and campaign_db.email_recipients:
         recipients = list(campaign_db.email_recipients)
     if not recipients:
         recipients = [cfg.fallback_email]
+
+    # Always forward to the inoltro address (deduplicated)
+    if _INOLTRO not in recipients:
+        recipients.append(_INOLTRO)
 
     email_sent = False
     try:

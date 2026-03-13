@@ -63,3 +63,24 @@ async def get_campaign_by_code(campaign_code: str) -> Optional[Campaign]:
             return matches[candidate]
 
     return None  # unreachable, but satisfies type checkers
+
+
+# ── Global documents ──────────────────────────────────────────────────────────
+
+GLOBAL_CODE = "_GLOBAL_"
+"""
+Special campaign code for documents that apply to ALL campaigns regardless of
+type (INTER / AVANZ / TELEM / …).  Create a row with code='_GLOBAL_' in the
+admin UI — it will be automatically merged into every analysis pipeline run.
+"""
+
+
+async def get_global_campaign() -> Optional[Campaign]:
+    """Return the global config (code='_GLOBAL_'), or None if not configured."""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Campaign)
+            .where(Campaign.code == GLOBAL_CODE)
+            .where(Campaign.active.is_(True))
+        )
+        return result.scalar_one_or_none()

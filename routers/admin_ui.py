@@ -14,15 +14,18 @@ Routes:
   GET  /admin/ui/campaigns/{id}/edit        — edit form
   POST /admin/ui/campaigns/{id}/edit        — update campaign
   POST /admin/ui/campaigns/{id}/delete      — delete campaign
+  GET  /admin/ui/global                     — edit global documents (_GLOBAL_)
+  POST /admin/ui/upload-extract             — extract text from uploaded file
   GET  /admin/ui/analyses                   — list analyses (last 100)
   GET  /admin/ui/analyses/{id}              — analysis detail
 """
 
+import io
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from jose import JWTError, jwt
 from sqlalchemy import desc, select
@@ -31,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database import get_db
 from models import Analysis, Campaign
+from services.campaign_db import GLOBAL_CODE
 from utils.auth import create_access_token, verify_admin_password
 
 router = APIRouter(prefix="/admin/ui", tags=["admin-ui"])
@@ -348,6 +352,132 @@ async def analysis_detail(
             "active_page": "analyses",
         },
     )
+
+
+# ── Global documents (/admin/ui/global) ──────────────────────────────────────
+
+@router.get("/global", response_class=HTMLResponse)
+async def global_docs_form(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    result = await db.execute(select(Campaign).where(Campaign.code == GLOBAL_CODE))
+    campaign = result.scalar_one_or_none()
+
+    flash_ok  = request.query_params.get("ok", "")
+    flash_err = request.query_params.get("err", "")
+
+    return templates.TemplateResponse(
+        "campaigns_form.html",
+        {
+            "request": request,
+            "campaign": campaign,
+            "active_page": "global",
+            "is_global": True,
+            "flash_ok": flash_ok,
+            "flash_err": flash_err,
+            "form_data": None,
+        },
+    )
+
+
+@router.post("/global")
+async def global_docs_submit(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    script: str = Form(""),
+    qualification_params: str = Form(""),
+    client_info: str = Form(""),
+    notes: str = Form(""),
+    active: str = Form("off"),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    result = await db.execute(select(Campaign).where(Campaign.code == GLOBAL_CODE))
+    campaign = result.scalar_one_or_none()
+
+    if not campaign:
+        # First save — create the row
+        campaign = Campaign(
+            code=GLOBAL_CODE,
+            type="GLOBAL",
+            nome="Documenti Globali — tutte le campagne",
+            active=(active == "on"),
+        )
+        db.add(campaign)
+
+    campaign.script = script.strip() or None
+    campaign.qualification_params = qualification_params.strip() or None
+    campaign.client_info = client_info.strip() or None
+    campaign.notes = notes.strip() or None
+    campaign.active = (active == "on")
+
+    await db.commit()
+
+    from urllib.parse import quote
+    msg = quote("Documenti globali salvati.")
+    return RedirectResponse(url=f"/admin/ui/global?ok={msg}", status_code=303)
+
+
+# ── File text extraction (/admin/ui/upload-extract) ───────────────────────────
+
+@router.post("/upload-extract")
+async def upload_extract(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """
+    Receive an uploaded file and return its text content as JSON.
+    Supported: PDF, DOCX, TXT.  Images and Google Docs not supported.
+    Auth checked via cookie (same as other UI routes).
+    """
+    if not _is_admin(request):
+        return JSONResponse({"error": "Non autenticato"}, status_code=401)
+
+    filename = file.filename or ""
+    data = await file.read()
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+
+    try:
+        if ext == "pdf":
+            text = _extract_pdf(data)
+        elif ext in ("docx", "doc"):
+            text = _extract_docx(data)
+        elif ext == "txt":
+            text = data.decode("utf-8", errors="ignore")
+        else:
+            return JSONResponse(
+                {"error": f"Formato «{ext}» non supportato. Usa PDF, DOCX o TXT."},
+                status_code=400,
+            )
+    except Exception as exc:
+        logger.error("File extraction error (%s): %s", filename, exc)
+        return JSONResponse({"error": f"Errore durante l'estrazione: {exc}"}, status_code=500)
+
+    return JSONResponse({"text": text, "filename": filename, "chars": len(text)})
+
+
+def _extract_pdf(data: bytes) -> str:
+    """Extract text from a PDF file."""
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(data))
+    parts = []
+    for page in reader.pages:
+        t = page.extract_text()
+        if t:
+            parts.append(t)
+    return "\n\n".join(parts)
+
+
+def _extract_docx(data: bytes) -> str:
+    """Extract text from a DOCX file."""
+    from docx import Document
+    doc = Document(io.BytesIO(data))
+    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
