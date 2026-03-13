@@ -103,14 +103,14 @@
           </td>
 
           {# Etichetta #}
-          <td data-val="{{ a.labels[0] if a.labels else '' }}">
+          <td data-val="{{ a.labels[0].name if a.labels else '' }}">
             {% for lbl in a.labels %}
-              <span class="badge me-1
-                {% if lbl.lower() == 'preso' %}bg-success
-                {% elif lbl.lower() in ('annullato', 'disdetto') %}bg-danger
-                {% else %}bg-secondary{% endif %}"
-                style="font-size:10px;">
-                {{ lbl }}
+              <span class="badge me-1"
+                style="font-size:10px;
+                       background-color:{{ lbl.color or '#6c757d' }};
+                       color:#fff;
+                       text-shadow:0 1px 2px rgba(0,0,0,.35);">
+                {{ lbl.name }}
               </span>
             {% else %}
               <span class="text-muted">—</span>

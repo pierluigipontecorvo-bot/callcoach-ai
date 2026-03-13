@@ -514,15 +514,22 @@ async def appointments_list(
         # In-memory longest-prefix match
         campaign_cfg = _match_campaign_prefix(campaign_code, all_campaigns) if campaign_code else None
 
-        # Operator
+        # Operator — prefer email pattern, fall back to campaign code agente
         op_email = find_operator_email(a)
-        op_display = format_operator_display(op_email) if op_email else "—"
+        if op_email:
+            op_display = format_operator_display(op_email)
+        else:
+            agente = (parsed.get("agente") or "") if parsed and parsed.get("valid") else ""
+            op_display = agente.upper() if agente else "—"
 
         # Ragione sociale — look in form fields first
         ragione = _extract_ragione_sociale(a)
 
-        # Labels
-        labels = [lbl.get("name", "") for lbl in (a.get("labels") or [])]
+        # Labels — preserve Acuity color alongside name
+        labels = [
+            {"name": lbl.get("name", ""), "color": lbl.get("color") or ""}
+            for lbl in (a.get("labels") or [])
+        ]
 
         # Datetime
         dt_raw = a.get("datetime", "")
