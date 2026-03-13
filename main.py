@@ -58,7 +58,8 @@ app.include_router(analysis.router, prefix="/analysis")
 
 @app.get("/", tags=["root"])
 async def root():
-    return {"status": "ok", "service": "CallCoach AI", "version": "1.0.0"}
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/admin/ui/login", status_code=302)
 
 
 @app.get("/health", tags=["root"])
