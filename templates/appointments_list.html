@@ -103,13 +103,22 @@
           </td>
 
           {# Etichetta #}
+          {# Mappa colori fissa (corrisponde ai colori visualizzati in Acuity) #}
+          {% set _LC = {
+            'ANNULLATO':  {'bg': '#f06292', 'fg': '#fff'},
+            'APP.TO KO':  {'bg': '#c62828', 'fg': '#fff'},
+            'APP.TO OK':  {'bg': '#2e7d32', 'fg': '#fff'},
+            'CONFERMATO': {'bg': '#42a5f5', 'fg': '#fff'},
+            'PRESO':      {'bg': '#f9a825', 'fg': '#333'},
+          } %}
           <td data-val="{{ a.labels[0].name if a.labels else '' }}">
             {% for lbl in a.labels %}
+              {% set _key = lbl.name | upper %}
+              {% set _style = _LC[_key] if _key in _LC else {'bg': '#6c757d', 'fg': '#fff'} %}
               <span class="badge me-1"
                 style="font-size:10px;
-                       background-color:{{ lbl.color or '#6c757d' }};
-                       color:#fff;
-                       text-shadow:0 1px 2px rgba(0,0,0,.35);">
+                       background-color:{{ _style.bg }};
+                       color:{{ _style.fg }};">
                 {{ lbl.name }}
               </span>
             {% else %}
