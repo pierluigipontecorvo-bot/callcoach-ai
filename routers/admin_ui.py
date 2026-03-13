@@ -453,7 +453,7 @@ async def appointments_list(
 
     from datetime import datetime, timedelta, timezone
 
-    from services.acuity import find_operator_email, format_operator_display, list_appointments
+    from services.acuity import get_operator_display, list_appointments
     from services.campaign_parser import parse_campaign_code
     from utils.helpers import parse_iso_datetime
 
@@ -514,10 +514,8 @@ async def appointments_list(
         # In-memory longest-prefix match
         campaign_cfg = _match_campaign_prefix(campaign_code, all_campaigns) if campaign_code else None
 
-        # Operator — identified via op.XX.nome@effoncall.com only.
-        # campaign_info["agente"] is the commercial agent, not the call operator.
-        op_email = find_operator_email(a)
-        op_display = format_operator_display(op_email) if op_email else "—"
+        # Operator — OPR. form field (primary) or op.XX.nome@effoncall.com (fallback)
+        op_display = get_operator_display(a)
 
         # Ragione sociale — look in form fields first
         ragione = _extract_ragione_sociale(a)

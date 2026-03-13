@@ -12,6 +12,7 @@ from services.acuity import (
     check_webhook_signature,
     find_operator_email,
     get_appointment,
+    get_operator_display,
     should_analyze,
 )
 from services.ai_analysis import _extract_operator_name, analyze_call
@@ -184,17 +185,13 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     appointment_dt_str = appointment_data.get("datetime", "")
     appointment_dt = parse_iso_datetime(appointment_dt_str) if appointment_dt_str else None
 
-    # ── Operator email (format: op.XX.nome@effoncall.com) ─────────────────────
+    # ── Operator: OPR. form field (primary) or op.XX.nome@effoncall.com (fallback) ──
     operator_email = find_operator_email(appointment_data)
-    if operator_email:
-        logger.info("[%s] Operator email: %s", appointment_id, operator_email)
-    else:
-        logger.info("[%s] No operator email found in appointment data", appointment_id)
+    operator_display = get_operator_display(appointment_data)
+    logger.info("[%s] Operator: %s (email=%s)", appointment_id, operator_display, operator_email)
 
     # Save identifying info immediately so the UI shows it during processing
-    # Operator = person who made the call, identified via op.XX.nome@effoncall.com only.
-    # campaign_info["agente"] is the sales agent (commerciale), NOT the call operator.
-    _initial_op_name = _extract_operator_name(operator_email) or ""
+    _initial_op_name = operator_display
     await _update_initial_info(
         analysis_id,
         campaign_code=campaign_info["raw"],
@@ -295,10 +292,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         "phone": phone,
         "id": appointment_id,
     }
-    # operator_name_db is computed below (after step 6) — pass it to the report
-    # so the HTML and DB are always in sync
-    _report_operator = _extract_operator_name(operator_email) or ""
-    html_report = generate_html_report(report, appointment_info, campaign_info, operator_name=_report_operator)
+    html_report = generate_html_report(report, appointment_info, campaign_info, operator_name=operator_display)
 
     # ── 7. Email ──────────────────────────────────────────────────────────────
     from config import settings as cfg
@@ -329,9 +323,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 8. Save to DB ─────────────────────────────────────────────────────────
     await _update_progress(analysis_id, 95, "Salvataggio...")
     try:
-        # Operator = caller identified via op.XX.nome@effoncall.com only.
-        # campaign_info["agente"] is the commercial agent, not the call operator.
-        operator_name_db = _extract_operator_name(operator_email) or ""
+        operator_name_db = operator_display
 
         await _save_analysis(
             analysis_id=analysis_id,

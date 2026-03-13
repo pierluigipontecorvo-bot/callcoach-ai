@@ -107,9 +107,12 @@ def should_analyze(payload: dict) -> bool:
 
 # ── REST API – get appointment ────────────────────────────────────────────────
 
-# ── Operator e-mail detection ─────────────────────────────────────────────────
+# ── Operator detection ────────────────────────────────────────────────────────
 
 _OPERATOR_EMAIL_RE = re.compile(r"op\.\d+\.[^@]+@effoncall\.com", re.IGNORECASE)
+
+# OPR. field: value like "91-STEFANO C." or "12-MARIO R."
+_OPR_VALUE_RE = re.compile(r"^(\d+)-(.+)$")
 
 
 def find_operator_email(appointment_data: dict) -> str:
@@ -134,6 +137,47 @@ def find_operator_email(appointment_data: dict) -> str:
         return ""
 
     return _search(appointment_data)
+
+
+def find_opr_field(appointment_data: dict) -> str:
+    """
+    Search Acuity form fields for a field named 'OPR.' (or similar) and
+    return its value (e.g. '91-STEFANO C.').
+    Returns empty string if not found.
+    """
+    for form in (appointment_data.get("forms") or []):
+        for val in (form.get("values") or []):
+            field_name = (val.get("name") or "").strip().upper()
+            if field_name.startswith("OPR"):
+                v = (val.get("value") or "").strip()
+                if v:
+                    return v
+    return ""
+
+
+def get_operator_display(appointment_data: dict) -> str:
+    """
+    Return the best available operator display string for an appointment.
+
+    Priority:
+      1. OPR. form field  →  '91-STEFANO C.'  →  '91 · STEFANO C.'
+      2. op.XX.nome@effoncall.com email  →  '91 · STEFANO'
+      3. '—' (should never occur if Acuity data is complete)
+    """
+    # 1. OPR. field
+    opr = find_opr_field(appointment_data)
+    if opr:
+        m = _OPR_VALUE_RE.match(opr)
+        if m:
+            return f"{m.group(1)} · {m.group(2).strip().upper()}"
+        return opr.upper()
+
+    # 2. Email fallback
+    email = find_operator_email(appointment_data)
+    if email:
+        return format_operator_display(email)
+
+    return "—"
 
 
 def format_operator_display(op_email: str) -> str:
