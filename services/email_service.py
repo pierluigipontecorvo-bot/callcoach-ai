@@ -143,6 +143,7 @@ def generate_html_report(
     appointment_info: dict,
     campaign_info: dict,
     operator_name: str = "",
+    client_company: str = "",
     model_name: str = "claude-haiku-4-5-20251001",
 ) -> str:
     """Render the analysis report as a self-contained HTML email."""
@@ -159,7 +160,8 @@ def generate_html_report(
     operator_name  = operator_name or "N/A"
     raw_code       = campaign_info.get("raw", "N/A")
     campaign_client = campaign_info.get("cliente", "N/A")
-    ragione_sociale = report.get("ragione_sociale", "N/A")
+    # Ragione sociale: sempre da Acuity, mai dall'AI
+    ragione_sociale = client_company or appointment_info.get("firstName", "") or "N/A"
 
     # Appointment date/time: prefer values extracted by Claude from transcript
     data_appt = report.get("data_appuntamento") or ""

@@ -296,7 +296,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         "phone": phone,
         "id": appointment_id,
     }
-    html_report = generate_html_report(report, appointment_info, campaign_info, operator_name=operator_display)
+    html_report = generate_html_report(report, appointment_info, campaign_info, operator_name=operator_display, client_company=client_company)
 
     # ── 7. Email ──────────────────────────────────────────────────────────────
     from config import settings as cfg
