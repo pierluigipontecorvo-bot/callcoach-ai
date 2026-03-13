@@ -9,6 +9,12 @@
     <h4 class="fw-bold mb-0">Analisi</h4>
     <p class="text-muted small mb-0">Ultime 100 analisi elaborate dal sistema.</p>
   </div>
+  {% if analyses %}
+  <form method="post" action="/admin/ui/analyses/clear"
+        onsubmit="return confirm('Eliminare TUTTE le {{ analyses | length }} analisi? L\'operazione non può essere annullata.')">
+    <button type="submit" class="btn btn-outline-danger btn-sm">🗑 Svuota analisi</button>
+  </form>
+  {% endif %}
 </div>
 
 {% if analyses %}

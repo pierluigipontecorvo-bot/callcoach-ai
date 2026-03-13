@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Appuntamenti — CallCoach Admin{% endblock %}
+
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Appuntamenti da analizzare</h4>
+    <p class="text-muted small mb-0">
+      Ultimi 60 giorni + prossimi 30 —
+      <strong>{{ appointments | length }}</strong> appuntamenti
+    </p>
+  </div>
+</div>
+
+{% if appointments %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle" style="font-size:13px;">
+      <thead>
+        <tr>
+          <th>Campagna</th>
+          <th>Ragione Sociale</th>
+          <th>Operatore</th>
+          <th>Etichetta</th>
+          <th title="Script · Parametri qualif. · Info cliente">Config <span class="text-muted fw-normal" style="font-size:10px;">S·Q·I</span></th>
+          <th>Data Appuntamento</th>
+          <th>Analisi</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in appointments %}
+        <tr {% if not a.is_past %}style="opacity:.65;"{% endif %}>
+
+          {# Campagna #}
+          <td>
+            <code style="font-size:12px;">{{ a.campaign_code }}</code>
+            {% if not a.campaign_cfg %}
+              <span class="ms-1 text-warning" title="Nessuna configurazione trovata per questa campagna">⚠</span>
+            {% endif %}
+          </td>
+
+          {# Ragione Sociale #}
+          <td style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+              title="{{ a.ragione }}">
+            {{ a.ragione }}
+          </td>
+
+          {# Operatore #}
+          <td style="white-space:nowrap;">
+            <span style="font-family:'Space Grotesk',sans-serif; font-weight:600;">
+              {{ a.op_display }}
+            </span>
+          </td>
+
+          {# Etichetta #}
+          <td>
+            {% for lbl in a.labels %}
+              <span class="badge me-1
+                {% if lbl.lower() == 'preso' %}bg-success
+                {% elif lbl.lower() in ('annullato', 'disdetto') %}bg-danger
+                {% else %}bg-secondary{% endif %}"
+                style="font-size:10px;">
+                {{ lbl }}
+              </span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endfor %}
+          </td>
+
+          {# Config indicators: Script · Qualif · Info #}
+          <td class="text-center" style="letter-spacing:2px;">
+            <span title="Script di vendita">
+              {% if a.campaign_cfg and a.campaign_cfg.script %}
+                <span class="dot-ok">●</span>
+              {% else %}
+                <span class="dot-miss">●</span>
+              {% endif %}
+            </span>
+            <span title="Parametri qualificazione">
+              {% if a.campaign_cfg and a.campaign_cfg.qualification_params %}
+                <span class="dot-ok">●</span>
+              {% else %}
+                <span class="dot-miss">●</span>
+              {% endif %}
+            </span>
+            <span title="Info cliente">
+              {% if a.campaign_cfg and a.campaign_cfg.client_info %}
+                <span class="dot-ok">●</span>
+              {% else %}
+                <span class="dot-miss">●</span>
+              {% endif %}
+            </span>
+          </td>
+
+          {# Data #}
+          <td style="white-space:nowrap; font-variant-numeric:tabular-nums;">
+            {{ a.dt_display }}
+          </td>
+
+          {# Analisi #}
+          <td>
+            {% if a.analysis %}
+              {% if a.analysis.status == "completed" %}
+                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
+                   class="badge bg-success text-decoration-none" style="font-size:11px;">
+                  ✓ Completata
+                </a>
+              {% elif a.analysis.status == "error" %}
+                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
+                   class="badge bg-danger text-decoration-none" style="font-size:11px;">
+                  ✗ Errore
+                </a>
+              {% else %}
+                <span class="badge bg-warning text-dark" style="font-size:11px;">
+                  ⏳ {{ a.analysis.status }}
+                </span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted" style="font-size:11px;">—</span>
+            {% endif %}
+          </td>
+
+          {# Azione #}
+          <td>
+            {% if a.is_past %}
+              <form method="post"
+                    action="/admin/ui/appointments/{{ a.account }}/{{ a.id }}/analyze"
+                    style="display:inline;">
+                <button type="submit"
+                        class="btn btn-dark btn-sm"
+                        style="font-size:11px; padding:3px 10px;"
+                        {% if a.analysis and a.analysis.status == 'completed' %}
+                        onclick="return confirm('Appuntamento già analizzato. Eseguire di nuovo?')"
+                        {% endif %}>
+                  {% if a.analysis and a.analysis.status == 'completed' %}↺ Ri-analizza{% else %}▶ Analizza{% endif %}
+                </button>
+              </form>
+            {% else %}
+              <span class="text-muted" style="font-size:11px;">futuro</span>
+            {% endif %}
+          </td>
+
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="text-muted small mt-2">
+  <span class="dot-ok">●</span> presente &nbsp;
+  <span class="dot-miss">●</span> assente &nbsp;·&nbsp;
+  S = Script &nbsp; Q = Qualificazione &nbsp; I = Info cliente
+</p>
+
+{% else %}
+<div class="card shadow-sm text-center py-5">
+  <div style="font-size:2rem;">📅</div>
+  <p class="text-muted mt-2 mb-0">
+    Nessun appuntamento trovato negli ultimi 60 giorni.<br>
+    <small>Verifica che le credenziali Acuity siano configurate.</small>
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}

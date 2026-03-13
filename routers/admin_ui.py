@@ -20,15 +20,17 @@ Routes:
   GET  /admin/ui/analyses/{id}              — analysis detail
 """
 
+import asyncio
 import io
 import logging
+import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from jose import JWTError, jwt
-from sqlalchemy import desc, select
+from sqlalchemy import delete as sa_delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -324,8 +326,30 @@ async def analyses_list(
             "request": request,
             "analyses": analyses,
             "active_page": "analyses",
+            "flash_ok": request.query_params.get("ok", ""),
+            "flash_err": request.query_params.get("err", ""),
         },
     )
+
+
+# ── Clear all analyses ────────────────────────────────────────────────────────
+
+@router.post("/analyses/clear")
+async def clear_analyses(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    count_result = await db.execute(select(func.count()).select_from(Analysis))
+    count = count_result.scalar_one_or_none() or 0
+    await db.execute(sa_delete(Analysis))
+    await db.commit()
+
+    from urllib.parse import quote
+    msg = quote(f"{count} analisi eliminate.")
+    return RedirectResponse(url=f"/admin/ui/analyses?ok={msg}", status_code=303)
 
 
 # ── Analysis detail ───────────────────────────────────────────────────────────
@@ -352,6 +376,147 @@ async def analysis_detail(
             "active_page": "analyses",
         },
     )
+
+
+# ── Appointments list ─────────────────────────────────────────────────────────
+
+@router.get("/appointments", response_class=HTMLResponse)
+async def appointments_list(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    from datetime import datetime, timedelta, timezone
+
+    from services.acuity import find_operator_email, format_operator_display, list_appointments
+    from services.campaign_parser import parse_campaign_code
+    from utils.helpers import parse_iso_datetime
+
+    now = datetime.now(timezone.utc)
+    min_date = (now - timedelta(days=60)).strftime("%Y-%m-%d")
+    max_date = (now + timedelta(days=30)).strftime("%Y-%m-%d")
+
+    # Fetch from both accounts in parallel
+    acuity_results = await asyncio.gather(
+        list_appointments(1, min_date=min_date, max_date=max_date),
+        list_appointments(2, min_date=min_date, max_date=max_date),
+        return_exceptions=True,
+    )
+    appts_1 = acuity_results[0] if isinstance(acuity_results[0], list) else []
+    appts_2 = acuity_results[1] if isinstance(acuity_results[1], list) else []
+
+    for a in appts_1:
+        a["_account"] = 1
+    for a in appts_2:
+        a["_account"] = 2
+
+    all_appts = sorted(appts_1 + appts_2, key=lambda a: a.get("datetime", ""), reverse=True)
+
+    # Load all active campaigns once for in-memory prefix matching
+    camp_result = await db.execute(
+        select(Campaign)
+        .where(Campaign.active.is_(True))
+        .where(Campaign.code != GLOBAL_CODE)
+    )
+    all_campaigns: dict[str, Campaign] = {c.code: c for c in camp_result.scalars().all()}
+
+    # Load existing analyses for these appointments (one query)
+    appt_ids = [str(a["id"]) for a in all_appts]
+    if appt_ids:
+        ana_result = await db.execute(
+            select(Analysis.appointment_id, Analysis.processing_status, Analysis.id)
+            .where(Analysis.appointment_id.in_(appt_ids))
+        )
+        analyses_map: dict[str, dict] = {
+            row.appointment_id: {"status": row.processing_status, "id": row.id}
+            for row in ana_result.all()
+        }
+    else:
+        analyses_map = {}
+
+    enriched = []
+    for a in all_appts:
+        appt_id = str(a["id"])
+        parsed = parse_campaign_code(a.get("type", ""))
+        campaign_code = parsed.get("raw") if parsed.get("valid") else None
+
+        # In-memory longest-prefix match
+        campaign_cfg = _match_campaign_prefix(campaign_code, all_campaigns) if campaign_code else None
+
+        # Operator
+        op_email = find_operator_email(a)
+        op_display = format_operator_display(op_email) if op_email else "—"
+
+        # Ragione sociale — look in form fields first
+        ragione = _extract_ragione_sociale(a)
+
+        # Labels
+        labels = [lbl.get("name", "") for lbl in (a.get("labels") or [])]
+
+        # Datetime
+        dt_raw = a.get("datetime", "")
+        try:
+            dt_obj = parse_iso_datetime(dt_raw)
+            is_past = dt_obj < now if dt_obj else False
+            dt_display = dt_obj.strftime("%d/%m/%Y %H:%M") if dt_obj else dt_raw[:16].replace("T", " ")
+        except Exception:
+            is_past = False
+            dt_display = dt_raw[:16].replace("T", " ")
+
+        enriched.append({
+            "id": appt_id,
+            "account": a["_account"],
+            "dt_display": dt_display,
+            "campaign_code": campaign_code or a.get("type", "—"),
+            "campaign_cfg": campaign_cfg,
+            "ragione": ragione,
+            "op_display": op_display,
+            "labels": labels,
+            "is_past": is_past,
+            "analysis": analyses_map.get(appt_id),
+        })
+
+    return templates.TemplateResponse(
+        "appointments_list.html",
+        {
+            "request": request,
+            "appointments": enriched,
+            "active_page": "appointments",
+            "flash_ok": request.query_params.get("ok", ""),
+            "flash_err": request.query_params.get("err", ""),
+        },
+    )
+
+
+@router.post("/appointments/{account_id}/{appointment_id}/analyze")
+async def trigger_appointment_analysis(
+    account_id: int,
+    appointment_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    from services.acuity import get_appointment
+    from routers.webhook import run_analysis_pipeline
+    from urllib.parse import quote
+
+    full_appointment = await get_appointment(appointment_id, account_id)
+    if not full_appointment:
+        msg = quote(f"Impossibile recuperare l'appuntamento {appointment_id} da Acuity.")
+        return RedirectResponse(url=f"/admin/ui/appointments?err={msg}", status_code=303)
+
+    background_tasks.add_task(
+        run_analysis_pipeline,
+        appointment_data=full_appointment,
+        acuity_account=account_id,
+    )
+
+    msg = quote(f"Analisi avviata per appuntamento {appointment_id}. Apparirà nella lista analisi al termine (qualche minuto).")
+    return RedirectResponse(url=f"/admin/ui/appointments?ok={msg}", status_code=303)
 
 
 # ── Global documents (/admin/ui/global) ──────────────────────────────────────
@@ -481,6 +646,35 @@ def _extract_docx(data: bytes) -> str:
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
+
+def _match_campaign_prefix(campaign_code: str, all_campaigns: dict) -> Optional[Campaign]:
+    """In-memory longest-prefix match (mirrors campaign_db.get_campaign_by_code)."""
+    if not campaign_code:
+        return None
+    tokens = campaign_code.split("-")
+    for i in range(len(tokens), 0, -1):
+        candidate = "-".join(tokens[:i])
+        if candidate in all_campaigns:
+            return all_campaigns[candidate]
+    return None
+
+
+def _extract_ragione_sociale(appt: dict) -> str:
+    """
+    Try to find the company/client name from Acuity form fields,
+    falling back to firstName + lastName.
+    """
+    KEYWORDS = ("ragione", "azienda", "cliente", "societa", "company")
+    for form in (appt.get("forms") or []):
+        for val in (form.get("values") or []):
+            name_lower = re.sub(r"[àèéìòù]", "a", (val.get("name") or "").lower())
+            if any(kw in name_lower for kw in KEYWORDS):
+                v = (val.get("value") or "").strip()
+                if v:
+                    return v
+    parts = [appt.get("firstName", ""), appt.get("lastName", "")]
+    return " ".join(p for p in parts if p).strip() or "—"
+
 
 def _parse_recipients(raw: str) -> list[str]:
     """Split a textarea (one email per line) into a list of non-empty strings."""

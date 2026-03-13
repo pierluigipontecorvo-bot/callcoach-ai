@@ -4,12 +4,16 @@ Acuity Scheduling webhook receiver + background analysis pipeline.
 
 import json
 import logging
-import re
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from services.acuity import check_webhook_signature, get_appointment, should_analyze
+from services.acuity import (
+    check_webhook_signature,
+    find_operator_email,
+    get_appointment,
+    should_analyze,
+)
 from services.ai_analysis import _extract_operator_name, analyze_call
 from services.campaign_db import get_campaign_by_code, get_global_campaign
 from services.campaign_parser import parse_campaign_code
@@ -20,33 +24,6 @@ from utils.helpers import parse_iso_datetime
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 logger = logging.getLogger(__name__)
-
-_OPERATOR_EMAIL_RE = re.compile(r"op\.\d+\.[^@]+@effoncall\.com", re.IGNORECASE)
-
-
-def _find_operator_email(appointment_data: dict) -> str:
-    """
-    Recursively search all string values in the Acuity appointment dict for
-    an email matching op.XX.nome@effoncall.com and return the first match.
-    Returns empty string if not found.
-    """
-    def _search(v) -> str:
-        if isinstance(v, str):
-            m = _OPERATOR_EMAIL_RE.search(v)
-            return m.group(0) if m else ""
-        if isinstance(v, dict):
-            for val in v.values():
-                found = _search(val)
-                if found:
-                    return found
-        if isinstance(v, list):
-            for item in v:
-                found = _search(item)
-                if found:
-                    return found
-        return ""
-
-    return _search(appointment_data)
 
 
 # ── DB helpers (imported lazily to avoid circular imports at module load) ──────
@@ -147,7 +124,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     appointment_dt = parse_iso_datetime(appointment_dt_str) if appointment_dt_str else None
 
     # ── Operator email (format: op.XX.nome@effoncall.com) ─────────────────────
-    operator_email = _find_operator_email(appointment_data)
+    operator_email = find_operator_email(appointment_data)
     if operator_email:
         logger.info("[%s] Operator email: %s", appointment_id, operator_email)
     else:
@@ -254,8 +231,9 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     qual_rating = report.get("qualificazione", {}).get("rating", 2)
     qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
 
-    # Recipients: ONLY from campaign config (never from Acuity data).
-    # Always include the mandatory forwarding address.
+    # Recipients: campaign config DB + operator (from Acuity) + mandatory inoltro.
+    # The only Acuity address ever used is op.XX.nome@effoncall.com; no other
+    # @effoncall.com / @effoncall.it addresses from Acuity are ever added.
     _INOLTRO = "inoltra@effoncall.com"
 
     recipients: list[str] = []
@@ -263,6 +241,10 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         recipients = list(campaign_db.email_recipients)
     if not recipients:
         recipients = [cfg.fallback_email]
+
+    # Add operator address first (only the op.XX.nome@ one — already validated)
+    if operator_email and operator_email not in recipients:
+        recipients.insert(0, operator_email)
 
     # Always forward to the inoltro address (deduplicated)
     if _INOLTRO not in recipients:
