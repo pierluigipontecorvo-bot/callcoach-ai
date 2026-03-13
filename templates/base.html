@@ -55,15 +55,6 @@
 
     <!-- Main content -->
     <main class="col-md-10 py-4 px-4">
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% for category, message in messages %}
-          <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }} alert-dismissible fade show" role="alert">
-            {{ message }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-          </div>
-        {% endfor %}
-      {% endwith %}
-
       {% if flash_ok %}
         <div class="alert alert-success alert-dismissible fade show">
           {{ flash_ok }}
