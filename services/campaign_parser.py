@@ -18,7 +18,8 @@ def parse_campaign_code(appointment_type_name: str) -> dict:
 
     parts = name_without_province.split('-')
 
-    if len(parts) < 4:
+    # Minimum: TIPO-CLIENTE-CODICE (3 segments); agente is optional
+    if len(parts) < 3:
         return {"raw": appointment_type_name, "valid": False}
 
     tipo = parts[0]
@@ -39,7 +40,7 @@ def parse_campaign_code(appointment_type_name: str) -> dict:
     else:
         cliente = parts[1]
         codice = parts[2]
-        agente = '-'.join(parts[3:])
+        agente = '-'.join(parts[3:])  # empty string if only 3 segments
 
     return {
         "raw": appointment_type_name,
@@ -93,7 +94,20 @@ def _run_tests() -> None:
                 "is_multisede": False,
             },
         ),
+        # 3-segment code — agente assente (es. AVANZ-AVI-0000)
+        (
+            "AVANZ-AVI-0000",
+            {
+                "valid": True,
+                "tipo": "AVANZ",
+                "cliente": "AVI",
+                "codice": "0000",
+                "agente": "",
+                "is_multisede": False,
+            },
+        ),
         ("BADCODE", {"valid": False}),
+        ("BAD-CODE", {"valid": False}),
     ]
 
     for raw, expected in cases:
