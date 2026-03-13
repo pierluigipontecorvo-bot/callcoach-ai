@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +47,8 @@ app.add_middleware(
 
 # ── Routers ────────────────────────────────────────────────────────────────────
 from routers import webhook, admin, admin_ui, analysis  # noqa: E402
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(webhook.router)
 app.include_router(admin.router, prefix="/admin")

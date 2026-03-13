@@ -50,7 +50,17 @@
       "Bash(railway logs --tail 10)",
       "Bash(railway logs --tail 5)",
       "Bash(railway run python -c \"print\\(''hello''\\)\")",
-      "Bash(railway logs --tail 8)"
+      "Bash(railway logs --tail 8)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://web-production-181160.up.railway.app/admin/ui/login)",
+      "Bash(git add templates/base.html)",
+      "Bash(git commit -m \"fix: remove Flask get_flashed_messages from Jinja2 template\")",
+      "Bash(git push)",
+      "Bash(curl -s -c /tmp/cc_cookies.txt -d \"password=Admin2026!\" -L https://web-production-181160.up.railway.app/admin/ui/login -o /dev/null -w \"%{http_code}\")",
+      "Bash(cp \"/Users/pierluigipontecorvo/Dropbox/Effoncall/01 EC_Effon Call/06 Brand vectors/Effoncall Logo/logo_new_negative.png\" /Users/pierluigipontecorvo/Dropbox/callcoach-ai/static/logo_dark.png)",
+      "Bash(cp \"/Users/pierluigipontecorvo/Dropbox/Effoncall/01 EC_Effon Call/06 Brand vectors/Effoncall Logo/Logo_new_ec_senza background.png\" /Users/pierluigipontecorvo/Dropbox/callcoach-ai/static/logo_light.png)",
+      "Bash(cp \"/Users/pierluigipontecorvo/Dropbox/Effoncall/01 EC_Effon Call/06 Brand vectors/Effoncall Logo/favicon_1.png\" /Users/pierluigipontecorvo/Dropbox/callcoach-ai/static/favicon.png)",
+      "Bash(git add -A)",
+      "Bash(git commit -m \"feat: Effoncall brand — colors, fonts \\(Poppins+Space Grotesk\\), logo\")"
     ]
   }
 }

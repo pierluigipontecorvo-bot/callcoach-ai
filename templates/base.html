@@ -4,50 +4,214 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}CallCoach Admin{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+
+  <!-- Fonts: Poppins (body) + Space Grotesk (headings/UI) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Bootstrap 5 -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+
   <style>
-    body { background: #f8f9fa; }
-    .navbar-brand { font-weight: 700; letter-spacing: .5px; }
-    .sidebar { min-height: calc(100vh - 56px); background: #212529; }
-    .sidebar .nav-link { color: #adb5bd; border-radius: 6px; margin: 2px 8px; }
-    .sidebar .nav-link:hover, .sidebar .nav-link.active { background: #343a40; color: #fff; }
-    .sidebar .nav-link .bi { margin-right: 8px; }
-    .card { border: 1px solid #dee2e6; border-radius: 10px; }
-    .badge-prefix { background: #e9ecef; color: #495057; font-size:.75rem; border-radius:4px; padding:2px 6px; }
-    textarea.doc-field { font-family: monospace; font-size: 13px; line-height: 1.5; }
-    .field-status { font-size: 12px; }
-    .dot-ok   { color: #198754; }
-    .dot-miss { color: #dee2e6; }
+    /* ── Brand tokens ──────────────────────────────────────────── */
+    :root {
+      --ec-navy:      #001126;
+      --ec-slate:     #708090;
+      --ec-grey:      #d3d2d2;
+      --ec-white:     #ffffff;
+      --ec-bg:        #f4f5f7;
+    }
+
+    /* ── Base typography ───────────────────────────────────────── */
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: var(--ec-bg);
+      color: #1a1a2e;
+      font-size: 14px;
+    }
+    h1, h2, h3, h4, h5, h6,
+    .navbar-brand, .fw-bold, .fw-semibold,
+    th, .card-header {
+      font-family: 'Space Grotesk', sans-serif;
+    }
+
+    /* ── Navbar ────────────────────────────────────────────────── */
+    .navbar {
+      background: var(--ec-navy) !important;
+      padding: 0 1.25rem;
+      height: 56px;
+      border-bottom: 1px solid rgba(112,128,144,.25);
+    }
+    .navbar-brand {
+      padding: 0;
+    }
+    .navbar-brand img {
+      height: 32px;
+      width: auto;
+    }
+
+    /* ── Sidebar ───────────────────────────────────────────────── */
+    .sidebar {
+      min-height: calc(100vh - 56px);
+      background: var(--ec-navy);
+      border-right: 1px solid rgba(112,128,144,.2);
+    }
+    .sidebar .nav-link {
+      color: var(--ec-grey);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: .3px;
+      border-radius: 6px;
+      margin: 2px 10px;
+      padding: 8px 12px;
+      transition: background .15s, color .15s;
+    }
+    .sidebar .nav-link:hover {
+      background: rgba(112,128,144,.15);
+      color: var(--ec-white);
+    }
+    .sidebar .nav-link.active {
+      background: rgba(255,255,255,.1);
+      color: var(--ec-white);
+    }
+    .sidebar-label {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--ec-slate);
+      padding: 12px 22px 4px;
+    }
+
+    /* ── Cards ─────────────────────────────────────────────────── */
+    .card {
+      border: 1px solid #e2e4e9;
+      border-radius: 10px;
+      background: var(--ec-white);
+    }
+    .card-header {
+      background: #f8f9fc;
+      border-bottom: 1px solid #e2e4e9;
+      padding: .75rem 1.25rem;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .2px;
+      color: var(--ec-navy);
+    }
+
+    /* ── Buttons ───────────────────────────────────────────────── */
+    .btn-dark, .btn-primary {
+      background: var(--ec-navy) !important;
+      border-color: var(--ec-navy) !important;
+    }
+    .btn-dark:hover, .btn-primary:hover {
+      background: #002244 !important;
+      border-color: #002244 !important;
+    }
+    .btn-outline-secondary {
+      color: var(--ec-slate);
+      border-color: var(--ec-grey);
+    }
+    .btn-outline-secondary:hover {
+      background: var(--ec-grey);
+      color: var(--ec-navy);
+      border-color: var(--ec-grey);
+    }
+
+    /* ── Table ─────────────────────────────────────────────────── */
+    .table thead th {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .6px;
+      text-transform: uppercase;
+      color: var(--ec-slate);
+      border-bottom: 2px solid #e2e4e9;
+      background: #f8f9fc;
+    }
+    .table td { vertical-align: middle; }
+    .table-hover tbody tr:hover { background: #f0f3f8; }
+
+    /* ── Doc field textareas ───────────────────────────────────── */
+    textarea.doc-field {
+      font-family: 'Poppins', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      border-color: #dde1e9;
+    }
+    textarea.doc-field:focus {
+      border-color: var(--ec-slate);
+      box-shadow: 0 0 0 .2rem rgba(112,128,144,.2);
+    }
+
+    /* ── Dot indicators ────────────────────────────────────────── */
+    .dot-ok   { color: #198754; font-size: 10px; }
+    .dot-miss { color: #dee2e6; font-size: 10px; }
+
+    /* ── Misc ──────────────────────────────────────────────────── */
+    .field-status  { font-size: 12px; }
+    .badge-prefix  { background: #eef0f5; color: #495057; font-size:.75rem; border-radius:4px; padding:2px 6px; }
+    code           { color: #405080; background: #eef0f8; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+    .form-label    { font-family: 'Space Grotesk', sans-serif; font-size: 13px; }
+    .form-control, .form-select {
+      border-color: #dde1e9;
+      font-size: 14px;
+    }
+    .form-control:focus, .form-select:focus {
+      border-color: var(--ec-slate);
+      box-shadow: 0 0 0 .2rem rgba(112,128,144,.2);
+    }
+    .form-text { font-size: 11.5px; color: var(--ec-slate); }
+
+    /* ── Page heading ──────────────────────────────────────────── */
+    h4.fw-bold {
+      color: var(--ec-navy);
+      font-size: 20px;
+      letter-spacing: -.2px;
+    }
   </style>
 </head>
 <body>
 
-<nav class="navbar navbar-dark bg-dark px-3">
+<!-- ── Navbar ────────────────────────────────────────────────────── -->
+<nav class="navbar d-flex justify-content-between align-items-center">
   <a class="navbar-brand" href="/admin/ui/campaigns">
-    🎙 CallCoach <span class="fw-light">Admin</span>
+    <img src="/static/logo_dark.png" alt="Effoncall" style="height:30px; width:auto;">
   </a>
   <div class="d-flex align-items-center gap-3">
-    <span class="text-secondary small">Effoncall</span>
-    <a href="/admin/ui/logout" class="btn btn-sm btn-outline-secondary">Esci</a>
+    <span style="color:var(--ec-slate); font-size:12px; font-family:'Space Grotesk',sans-serif; letter-spacing:.3px;">
+      CallCoach Admin
+    </span>
+    <a href="/admin/ui/logout"
+       style="color:var(--ec-grey); font-size:12px; font-family:'Space Grotesk',sans-serif; text-decoration:none; opacity:.8;"
+       onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.8">
+      Esci ↗
+    </a>
   </div>
 </nav>
 
+<!-- ── Layout ────────────────────────────────────────────────────── -->
 <div class="container-fluid">
   <div class="row">
 
     <!-- Sidebar -->
     <nav class="col-md-2 sidebar py-3 d-none d-md-block">
+      <div class="sidebar-label">Gestione</div>
       <ul class="nav flex-column">
         <li class="nav-item">
           <a class="nav-link {% if active_page == 'campaigns' %}active{% endif %}"
              href="/admin/ui/campaigns">
-            📋 Campagne
+            ▤ &nbsp;Campagne
           </a>
         </li>
         <li class="nav-item">
           <a class="nav-link {% if active_page == 'analyses' %}active{% endif %}"
              href="/admin/ui/analyses">
-            📊 Analisi
+            ▦ &nbsp;Analisi
           </a>
         </li>
       </ul>
@@ -55,20 +219,22 @@
 
     <!-- Main content -->
     <main class="col-md-10 py-4 px-4">
+
       {% if flash_ok %}
-        <div class="alert alert-success alert-dismissible fade show">
+        <div class="alert alert-success alert-dismissible fade show" style="border-radius:8px; font-size:13px;">
           {{ flash_ok }}
           <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
       {% endif %}
       {% if flash_err %}
-        <div class="alert alert-danger alert-dismissible fade show">
+        <div class="alert alert-danger alert-dismissible fade show" style="border-radius:8px; font-size:13px;">
           {{ flash_err }}
           <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
       {% endif %}
 
       {% block content %}{% endblock %}
+
     </main>
 
   </div>
