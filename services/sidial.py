@@ -237,30 +237,37 @@ async def _download_rec(rec_id: str) -> Optional[bytes]:
 async def find_and_download_all_recordings(
     phone: str,
     campaign_code: Optional[str] = None,
-    max_age_hours: int = 48,
+    appointment_dt: Optional[datetime] = None,   # ignorato, mantenuto per compatibilità
+    lookback_days: int = 30,
     max_recs: int = 3,
 ) -> list[Tuple[str, bytes]]:
     """
-    Trova e scarica le registrazioni RECENTI per un numero di telefono.
+    Trova e scarica le registrazioni degli ultimi lookback_days giorni per un
+    numero di telefono.  L'obiettivo è analizzare le TELEFONATE fatte al cliente,
+    non la data dell'appuntamento Acuity.
 
     Flusso:
-      1. searchLeads (POST, params JSON exact match) → leadId(s)
-      2. searchRecs   (POST, params JSON su lead)    → lista rec con id/createdWhen
-      3. filtra le registrazioni nelle ultime max_age_hours (default 48h)
-         → se nessuna cade nella finestra, usa solo l'ultima disponibile
+      1. searchLeads → leadId(s) per il numero
+      2. searchRecs  → tutte le registrazioni del lead
+      3. filtra quelle negli ultimi lookback_days giorni (default 30)
+         → se nessuna cade nella finestra, usa solo la più recente disponibile
          → al massimo max_recs registrazioni (le più recenti)
-      4. getLeadRec   (GET, id)                      → audio bytes per ogni rec
+      4. getLeadRec  → audio bytes per ognuna
 
     Restituisce lista di (rec_id, audio_bytes), ordine cronologico (più vecchia prima).
-    Restituisce [] se non trova nulla o tutti i download falliscono.
     """
     from datetime import timedelta
 
     _log_config()
     norm_phone = _normalize_phone(phone)
+
+    now_utc = datetime.now(tz=timezone.utc)
+    cutoff  = now_utc - timedelta(days=lookback_days)
+
     logger.info(
-        "Sidial: ricerca registrazioni phone=%s (normalizzato=%s) campaign=%s finestra=%dh max=%d",
-        phone, norm_phone, campaign_code, max_age_hours, max_recs,
+        "Sidial: ricerca phone=%s (norm=%s) campaign=%s ultimi %d giorni (dal %s) max=%d",
+        phone, norm_phone, campaign_code, lookback_days,
+        cutoff.strftime("%Y-%m-%d"), max_recs,
     )
 
     # 1. Trova lead(s)
@@ -283,7 +290,7 @@ async def find_and_download_all_recordings(
             continue
         recs = await _search_recs_by_lead(lead_id)
         for r in recs:
-            r["_lead_id"] = lead_id  # teniamo traccia del lead
+            r["_lead_id"] = lead_id
         all_recs.extend(recs)
 
     if not all_recs:
@@ -304,26 +311,24 @@ async def find_and_download_all_recordings(
         len(all_recs_sorted), norm_phone,
     )
 
-    # 4. Filtra: tieni solo quelle nelle ultime max_age_hours
-    now_utc = datetime.now(tz=timezone.utc)
-    cutoff = now_utc - timedelta(hours=max_age_hours)
+    # 4. Filtra: tieni solo quelle negli ultimi lookback_days giorni
     recent = [
         r for r in all_recs_sorted
         if (_parse_rec_datetime(r) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff
     ]
 
     if recent:
-        recs_to_download = recent[-max_recs:]  # al massimo max_recs, le più recenti
+        recs_to_download = recent[-max_recs:]   # le max_recs più recenti
         logger.info(
-            "Sidial: %d registrazioni nelle ultime %dh (su %d totali) — scarico le ultime %d",
-            len(recent), max_age_hours, len(all_recs_sorted), len(recs_to_download),
+            "Sidial: %d registrazioni negli ultimi %d giorni (su %d totali) — scarico le ultime %d",
+            len(recent), lookback_days, len(all_recs_sorted), len(recs_to_download),
         )
     else:
-        # Fallback: nessuna registrazione recente → prendi solo l'ultima disponibile
+        # Fallback: nessuna recente → usa solo la più recente in assoluto
         recs_to_download = all_recs_sorted[-1:]
         logger.warning(
-            "Sidial: nessuna registrazione nelle ultime %dh per phone=%s — uso l'ultima disponibile",
-            max_age_hours, norm_phone,
+            "Sidial: nessuna registrazione negli ultimi %d giorni per phone=%s — uso l'ultima disponibile",
+            lookback_days, norm_phone,
         )
 
     # 5. Scarica le registrazioni selezionate
