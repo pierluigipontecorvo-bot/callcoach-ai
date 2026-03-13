@@ -237,23 +237,30 @@ async def _download_rec(rec_id: str) -> Optional[bytes]:
 async def find_and_download_all_recordings(
     phone: str,
     campaign_code: Optional[str] = None,
+    max_age_hours: int = 48,
+    max_recs: int = 3,
 ) -> list[Tuple[str, bytes]]:
     """
-    Trova e scarica TUTTE le registrazioni per un numero di telefono.
+    Trova e scarica le registrazioni RECENTI per un numero di telefono.
 
     Flusso:
       1. searchLeads (POST, params JSON exact match) → leadId(s)
       2. searchRecs   (POST, params JSON su lead)    → lista rec con id/createdWhen
-      3. getLeadRec   (GET, id)                      → audio bytes per ogni rec
+      3. filtra le registrazioni nelle ultime max_age_hours (default 48h)
+         → se nessuna cade nella finestra, usa solo l'ultima disponibile
+         → al massimo max_recs registrazioni (le più recenti)
+      4. getLeadRec   (GET, id)                      → audio bytes per ogni rec
 
     Restituisce lista di (rec_id, audio_bytes), ordine cronologico (più vecchia prima).
     Restituisce [] se non trova nulla o tutti i download falliscono.
     """
+    from datetime import timedelta
+
     _log_config()
     norm_phone = _normalize_phone(phone)
     logger.info(
-        "Sidial: ricerca TUTTE le registrazioni phone=%s (normalizzato=%s) campaign=%s",
-        phone, norm_phone, campaign_code,
+        "Sidial: ricerca registrazioni phone=%s (normalizzato=%s) campaign=%s finestra=%dh max=%d",
+        phone, norm_phone, campaign_code, max_age_hours, max_recs,
     )
 
     # 1. Trova lead(s)
@@ -293,13 +300,35 @@ async def find_and_download_all_recordings(
 
     all_recs_sorted = sorted(all_recs, key=_sort_key)
     logger.info(
-        "Sidial: %d registrazioni da scaricare per phone=%s",
+        "Sidial: %d registrazioni totali per phone=%s",
         len(all_recs_sorted), norm_phone,
     )
 
-    # 4. Scarica ogni registrazione
+    # 4. Filtra: tieni solo quelle nelle ultime max_age_hours
+    now_utc = datetime.now(tz=timezone.utc)
+    cutoff = now_utc - timedelta(hours=max_age_hours)
+    recent = [
+        r for r in all_recs_sorted
+        if (_parse_rec_datetime(r) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff
+    ]
+
+    if recent:
+        recs_to_download = recent[-max_recs:]  # al massimo max_recs, le più recenti
+        logger.info(
+            "Sidial: %d registrazioni nelle ultime %dh (su %d totali) — scarico le ultime %d",
+            len(recent), max_age_hours, len(all_recs_sorted), len(recs_to_download),
+        )
+    else:
+        # Fallback: nessuna registrazione recente → prendi solo l'ultima disponibile
+        recs_to_download = all_recs_sorted[-1:]
+        logger.warning(
+            "Sidial: nessuna registrazione nelle ultime %dh per phone=%s — uso l'ultima disponibile",
+            max_age_hours, norm_phone,
+        )
+
+    # 5. Scarica le registrazioni selezionate
     results: list[Tuple[str, bytes]] = []
-    for rec in all_recs_sorted:
+    for rec in recs_to_download:
         rec_id = str(rec.get("id") or "")
         if not rec_id:
             logger.warning("Sidial: record senza id: %s", rec)
@@ -312,7 +341,7 @@ async def find_and_download_all_recordings(
 
     logger.info(
         "Sidial: %d/%d registrazioni scaricate per phone=%s",
-        len(results), len(all_recs_sorted), norm_phone,
+        len(results), len(recs_to_download), norm_phone,
     )
     return results
 
