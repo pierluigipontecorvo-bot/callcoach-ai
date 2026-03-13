@@ -146,10 +146,17 @@ def find_operator_email(appointment_data: dict) -> str:
 
 
 def _norm_fieldname(s: str) -> str:
-    """Uppercase + strip accents for reliable keyword matching."""
-    return re.sub(r"[ÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜ]", lambda m: "AEIOU"[
-        "aeiouaeiouaeiouaeiouaeiou".index(m.group().lower()) // 4
-    ] if m.group().lower() in "àáâãäåèéêëìíîïòóôõöùúûü" else m.group(), s.strip().upper())
+    """Uppercase + strip common Latin accents for keyword matching."""
+    s = s.strip().upper()
+    for src, dst in [
+        ("À","A"),("Á","A"),("Â","A"),("Ã","A"),("Ä","A"),("Å","A"),
+        ("È","E"),("É","E"),("Ê","E"),("Ë","E"),
+        ("Ì","I"),("Í","I"),("Î","I"),("Ï","I"),
+        ("Ò","O"),("Ó","O"),("Ô","O"),("Õ","O"),("Ö","O"),
+        ("Ù","U"),("Ú","U"),("Û","U"),("Ü","U"),
+    ]:
+        s = s.replace(src, dst)
+    return s
 
 
 def _search_opr_in_list(items: list) -> str:
