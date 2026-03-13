@@ -14,6 +14,19 @@
   </div>
 </div>
 
+{% if flash_ok %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+  {{ flash_ok }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if flash_err %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+  {{ flash_err }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 {% if appointments %}
 <div class="card shadow-sm">
   <div class="table-responsive">
