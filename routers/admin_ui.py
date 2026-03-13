@@ -453,7 +453,7 @@ async def appointments_list(
 
     from datetime import datetime, timedelta, timezone
 
-    from services.acuity import get_operator_display, list_appointments
+    from services.acuity import extract_ragione_sociale, get_operator_display, list_appointments
     from services.campaign_parser import parse_campaign_code
     from utils.helpers import parse_iso_datetime
 
@@ -517,8 +517,8 @@ async def appointments_list(
         # Operator — OPR. form field (primary) or op.XX.nome@effoncall.com (fallback)
         op_display = get_operator_display(a)
 
-        # Ragione sociale — look in form fields first
-        ragione = _extract_ragione_sociale(a)
+        # Ragione sociale — from Acuity form fields
+        ragione = extract_ragione_sociale(a) or "—"
 
         # Labels — preserve Acuity color alongside name
         labels = [

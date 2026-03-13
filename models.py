@@ -47,6 +47,7 @@ class Analysis(Base):
     appointment_id = Column(String(100))
     appointment_datetime = Column(DateTime(timezone=True))
     client_phone = Column(String(50))
+    client_company = Column(String(300))
     operator_name = Column(String(100))
     acuity_account = Column(Integer)
     acuity_label = Column(String(100))

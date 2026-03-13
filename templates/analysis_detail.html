@@ -37,6 +37,10 @@
         <strong>{{ analysis.operator_name or "—" }}</strong>
       </div>
       <div class="col-sm-4 col-md-3">
+        <div class="text-muted small">Ragione Sociale</div>
+        <strong>{{ analysis.client_company or "—" }}</strong>
+      </div>
+      <div class="col-sm-4 col-md-3">
         <div class="text-muted small">Telefono cliente</div>
         {{ analysis.client_phone or "—" }}
       </div>
@@ -51,8 +55,12 @@
         {{ analysis.acuity_account or "—" }}
       </div>
       <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Sidial Call ID</div>
-        <code class="small">{{ analysis.sidial_call_id or "—" }}</code>
+        <div class="text-muted small">Telefonate analizzate</div>
+        {% if analysis.sidial_call_id %}
+          {% set _calls = analysis.sidial_call_id.split(',') %}
+          <strong>{{ _calls | length }}</strong>
+          <span class="text-muted small">(ID: {{ analysis.sidial_call_id }})</span>
+        {% else %}—{% endif %}
       </div>
       <div class="col-sm-4 col-md-3">
         <div class="text-muted small">Qualificazione</div>

@@ -191,6 +191,32 @@ def format_operator_display(op_email: str) -> str:
     return op_email or "—"
 
 
+# ── Ragione Sociale extraction ────────────────────────────────────────────────
+
+_RS_KEYWORDS = ("ragione", "azienda", "cliente", "societa", "company")
+
+def _norm(s: str) -> str:
+    """Lowercase + strip accents for keyword matching."""
+    return re.sub(r"[àáâãäåèéêëìíîïòóôõöùúûü]", lambda m: "aeiou"["aeiouaeiouaeiouaeiou".index(m.group())//4] if m.group() in "àáâãäåèéêëìíîïòóôõöùúûü" else m.group(), s.lower())
+
+def extract_ragione_sociale(appointment_data: dict) -> str:
+    """
+    Extract company/client name from Acuity appointment data.
+    Searches form fields whose name contains keywords like 'ragione',
+    'azienda', 'cliente', 'societa', 'company'.
+    Falls back to firstName + lastName.
+    """
+    for form in (appointment_data.get("forms") or []):
+        for val in (form.get("values") or []):
+            field_name = re.sub(r"[àèéìòù]", "a", (val.get("name") or "").lower())
+            if any(kw in field_name for kw in _RS_KEYWORDS):
+                v = (val.get("value") or "").strip()
+                if v:
+                    return v
+    parts = [appointment_data.get("firstName", ""), appointment_data.get("lastName", "")]
+    return " ".join(p for p in parts if p).strip() or ""
+
+
 # ── REST API – list appointments ───────────────────────────────────────────────
 
 async def list_appointments(

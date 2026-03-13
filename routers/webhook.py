@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from services.acuity import (
     check_webhook_signature,
+    extract_ragione_sociale,
     find_operator_email,
     get_appointment,
     get_operator_display,
@@ -90,6 +91,7 @@ async def _save_analysis(
     acuity_account: int,
     appointment_dt,
     phone: str,
+    client_company: str,
     sidial_call_id: str,
     operator_name: str,
     qualification_level: str,
@@ -106,6 +108,7 @@ async def _save_analysis(
         obj.campaign_code = campaign_code
         obj.appointment_datetime = appointment_dt
         obj.client_phone = phone
+        obj.client_company = client_company or None
         obj.operator_name = operator_name
         obj.acuity_account = acuity_account
         obj.acuity_label = "PRESO"
@@ -184,6 +187,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     phone = appointment_data.get("phone", "")
     appointment_dt_str = appointment_data.get("datetime", "")
     appointment_dt = parse_iso_datetime(appointment_dt_str) if appointment_dt_str else None
+    client_company = extract_ragione_sociale(appointment_data)
 
     # ── Operator: OPR. form field (primary) or op.XX.nome@effoncall.com (fallback) ──
     operator_email = find_operator_email(appointment_data)
@@ -335,6 +339,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             acuity_account=acuity_account,
             appointment_dt=appointment_dt,
             phone=phone,
+            client_company=client_company,
             sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
             operator_name=operator_name_db,
             qualification_level=qualification_level,
