@@ -250,19 +250,19 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     if _INOLTRO not in recipients:
         recipients.append(_INOLTRO)
 
+    # EMAIL TEMPORANEAMENTE DISABILITATA — bug in corso di risoluzione
     email_sent = False
-    try:
-        await send_analysis_report(
-            recipients=recipients,
-            html_content=html_report,
-            operator_name=campaign_info.get("agente", "Operatore"),
-            qualification_level=qualification_level,
-            appointment_datetime=appointment_dt_str,
-        )
-        email_sent = True
-    except Exception as exc:
-        # Non-fatal: log the error but still save the analysis
-        logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
+    # try:
+    #     await send_analysis_report(
+    #         recipients=recipients,
+    #         html_content=html_report,
+    #         operator_name=campaign_info.get("agente", "Operatore"),
+    #         qualification_level=qualification_level,
+    #         appointment_datetime=appointment_dt_str,
+    #     )
+    #     email_sent = True
+    # except Exception as exc:
+    #     logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
 
     # ── 8. Save to DB ─────────────────────────────────────────────────────────
     try:
