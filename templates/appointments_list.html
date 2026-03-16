@@ -118,10 +118,14 @@
   }
 
   /* ── Main loader ── */
-  window.loadAppts = function (forceRefresh) {
+  /* silent=true → no spinner, no scroll reset (background auto-poll) */
+  window.loadAppts = function (forceRefresh, silent) {
     if (_reloadTimer) { clearTimeout(_reloadTimer); _reloadTimer = null; }
     document.getElementById('appt-refresh').style.display = 'none';
-    document.getElementById('appt-container').innerHTML = spinnerHtml();
+
+    if (!silent) {
+      document.getElementById('appt-container').innerHTML = spinnerHtml();
+    }
 
     var url = '/admin/ui/appointments/data' + (forceRefresh ? '?refresh=1' : '');
     fetch(url, { credentials: 'same-origin' })
@@ -133,7 +137,11 @@
       .then(function (html) {
         if (html === null) return;
         var container = document.getElementById('appt-container');
+
+        /* silent update: remember scroll, replace, restore */
+        var scrollY = silent ? window.scrollY : 0;
         container.innerHTML = html;
+        if (silent && scrollY) window.scrollTo(0, scrollY);
 
         /* update subtitle */
         var wrapper = document.getElementById('appt-data');
@@ -141,9 +149,9 @@
           var sub = wrapper.getAttribute('data-subtitle');
           if (sub) document.getElementById('appt-subtitle').textContent = sub;
 
-          /* auto-reload if any analysis is still processing */
+          /* auto-poll if any analysis is still processing — silently */
           if (wrapper.getAttribute('data-auto-reload') === 'true') {
-            _reloadTimer = setTimeout(function () { window.loadAppts(false); }, 4000);
+            _reloadTimer = setTimeout(function () { window.loadAppts(false, true); }, 4000);
           }
         }
 
@@ -151,10 +159,14 @@
         document.getElementById('appt-refresh').style.display = '';
       })
       .catch(function (err) {
-        document.getElementById('appt-container').innerHTML =
-          '<div class="alert alert-danger">Errore nel caricamento dati (' + err + '). ' +
-          '<a href="#" onclick="loadAppts(true);return false;">Riprova</a></div>';
+        if (!silent) {
+          document.getElementById('appt-container').innerHTML =
+            '<div class="alert alert-danger">Errore nel caricamento dati (' + err + '). ' +
+            '<a href="#" onclick="loadAppts(true);return false;">Riprova</a></div>';
+        }
         document.getElementById('appt-refresh').style.display = '';
+        /* retry after 10s on error */
+        _reloadTimer = setTimeout(function () { window.loadAppts(false, true); }, 10000);
       });
   };
 

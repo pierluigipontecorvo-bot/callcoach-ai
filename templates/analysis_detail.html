@@ -4,7 +4,28 @@
 {% block title %}Analisi #{{ analysis.id }} — CallCoach Admin{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+
+{# ── NON IN TARGET banner ── #}
+{% set _qual = (analysis.report_json or {}).get('qualificazione', {}) %}
+{% if _qual.get('fuori_parametro') %}
+<div class="d-flex align-items-start gap-3 mb-4 p-3 px-4"
+     style="background:#fdecea; border:1.5px solid #e57373; border-radius:10px; border-left:5px solid #c0392b;">
+  <span style="font-size:26px; line-height:1;">⛔</span>
+  <div>
+    <div style="font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; color:#c0392b; letter-spacing:.2px;">
+      APPUNTAMENTO NON IN TARGET
+    </div>
+    {% if _qual.get('spiegazione') %}
+    <div style="font-size:13px; color:#7f3030; margin-top:3px; line-height:1.5;">
+      {{ _qual.get('spiegazione') }}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Page header ── #}
+<div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h4 class="fw-bold mb-0">Analisi #{{ analysis.id }}</h4>
     <p class="text-muted small mb-0">
@@ -12,6 +33,7 @@
       {% if analysis.appointment_datetime %}
         {{ analysis.appointment_datetime.strftime('%d/%m/%Y %H:%M') }}
       {% endif %}
+      {% if analysis.operator_name %}&mdash; <strong>{{ analysis.operator_name }}</strong>{% endif %}
     </p>
   </div>
   <div class="d-flex gap-2">
@@ -19,52 +41,41 @@
     <a href="/admin/ui/analyses/{{ analysis.id }}/print" target="_blank"
        class="btn btn-outline-secondary btn-sm">↗ Stampa / PDF</a>
     {% endif %}
-    <a href="/admin/ui/analyses" class="btn btn-outline-secondary btn-sm">← Torna alla lista</a>
+    <a href="/admin/ui/analyses" class="btn btn-outline-secondary btn-sm">← Lista analisi</a>
   </div>
 </div>
 
 {# ── Metadata ── #}
 <div class="card shadow-sm mb-4">
-  <div class="card-header fw-semibold">Dati appuntamento</div>
-  <div class="card-body">
-    <div class="row g-3">
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Campagna</div>
-        <code>{{ analysis.campaign_code or "—" }}</code>
+  <div class="card-body py-3">
+    <div class="row g-2" style="font-size:13px;">
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Campagna</div>
+        <code style="font-size:12px;">{{ analysis.campaign_code or "—" }}</code>
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Operatore</div>
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Operatore</div>
         <strong>{{ analysis.operator_name or "—" }}</strong>
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Ragione Sociale</div>
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Ragione Sociale</div>
         <strong>{{ analysis.client_company or "—" }}</strong>
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Telefono cliente</div>
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Telefono</div>
         {{ analysis.client_phone or "—" }}
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Data appuntamento</div>
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Appuntamento</div>
         {% if analysis.appointment_datetime %}
           {{ analysis.appointment_datetime.strftime('%d/%m/%Y %H:%M') }}
         {% else %}—{% endif %}
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Account Acuity</div>
-        {{ analysis.acuity_account or "—" }}
-      </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Telefonate analizzate</div>
-        {% if analysis.sidial_call_id %}
-          {% set _calls = analysis.sidial_call_id.split(',') %}
-          <strong>{{ _calls | length }}</strong>
-          <span class="text-muted small">(ID: {{ analysis.sidial_call_id }})</span>
-        {% else %}—{% endif %}
-      </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Qualificazione</div>
-        {% if analysis.qualification_level == 'buona' %}
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Qualificazione</div>
+        {% if _qual.get('fuori_parametro') %}
+          <span class="badge" style="background:#c0392b; font-size:11px;">⛔ NON IN TARGET</span>
+        {% elif analysis.qualification_level == 'buona' %}
           <span class="badge bg-success">buona</span>
         {% elif analysis.qualification_level == 'da_migliorare' %}
           <span class="badge bg-warning text-dark">da migliorare</span>
@@ -74,65 +85,55 @@
           <span class="text-muted">—</span>
         {% endif %}
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Email report</div>
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Email</div>
         {% if analysis.email_sent %}
           <span class="text-success">✓ inviata</span>
         {% else %}
           <span class="text-muted">non inviata</span>
         {% endif %}
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Stato elaborazione</div>
+      <div class="col-6 col-md-3">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Stato</div>
         {% if analysis.processing_status == 'completed' %}
-          <span class="badge bg-success">completed</span>
+          <span class="badge bg-success">completata</span>
         {% elif analysis.processing_status == 'error' %}
-          <span class="badge bg-danger">error</span>
+          <span class="badge bg-danger">errore</span>
         {% else %}
           <span class="badge bg-secondary">{{ analysis.processing_status }}</span>
         {% endif %}
       </div>
-      <div class="col-sm-4 col-md-3">
-        <div class="text-muted small">Creata il</div>
-        {{ analysis.created_at.strftime('%d/%m/%Y %H:%M:%S') }}
-      </div>
     </div>
-
     {% if analysis.error_message %}
-    <div class="alert alert-danger mt-3 mb-0">
+    <div class="alert alert-danger mt-3 mb-0 py-2" style="font-size:13px;">
       <strong>Errore:</strong> {{ analysis.error_message }}
     </div>
     {% endif %}
   </div>
 </div>
 
-{# ── HTML Report ── #}
+{# ── HTML Report — full width, auto-height ── #}
 {% if analysis.report_html %}
-<div class="card shadow-sm mb-4">
-  <div class="card-header fw-semibold d-flex justify-content-between">
-    <span>Report HTML</span>
-    <button class="btn btn-sm btn-outline-secondary" onclick="toggleReport()">Espandi / Comprimi</button>
-  </div>
-  <div class="card-body p-0" id="reportContainer">
-    <iframe id="reportFrame"
-            srcdoc="{{ analysis.report_html | e }}"
-            style="width:100%; border:none; min-height:600px;">
-    </iframe>
-  </div>
+<div class="mb-4" style="margin-left:-1.5rem; margin-right:-1.5rem;">
+  <iframe id="reportFrame"
+          srcdoc="{{ analysis.report_html | e }}"
+          style="width:100%; border:none; display:block; min-height:400px;"
+          scrolling="no">
+  </iframe>
 </div>
 {% endif %}
 
-{# ── Transcript (collapsed by default) ── #}
+{# ── Trascrizione ── #}
 {% if analysis.transcript %}
 <div class="card shadow-sm mb-4">
-  <div class="card-header fw-semibold d-flex justify-content-between align-items-center"
+  <div class="card-header d-flex justify-content-between align-items-center"
        style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#transcriptCollapse">
-    <span>Trascrizione</span>
-    <span style="font-size:12px; color:#708090; font-weight:400;">▼ espandi</span>
+    <span class="fw-semibold" style="font-size:13px;">Trascrizione</span>
+    <span id="transcriptToggleIcon" style="font-size:11px; color:#708090;">▼ espandi</span>
   </div>
   <div class="collapse" id="transcriptCollapse">
-    <div class="card-body" style="max-height:500px; overflow-y:auto;">
-      <pre class="mb-0" style="white-space:pre-wrap; font-size:13px; line-height:1.6;">{{ analysis.transcript }}</pre>
+    <div class="card-body" style="overflow-y:auto; max-height:60vh;">
+      <pre class="mb-0" style="white-space:pre-wrap; font-size:13px; line-height:1.7; color:#2a2a3a;">{{ analysis.transcript }}</pre>
     </div>
   </div>
 </div>
@@ -142,9 +143,39 @@
 
 {% block scripts %}
 <script>
-function toggleReport() {
-  const frame = document.getElementById('reportFrame');
-  frame.style.minHeight = frame.style.minHeight === '200px' ? '600px' : '200px';
-}
+/* ── Auto-resize iframe to full content height ── */
+(function () {
+  var frame = document.getElementById('reportFrame');
+  if (!frame) return;
+
+  function resize() {
+    try {
+      var doc = frame.contentDocument || frame.contentWindow.document;
+      var h = Math.max(
+        doc.body ? doc.body.scrollHeight : 0,
+        doc.documentElement ? doc.documentElement.scrollHeight : 0
+      );
+      if (h > 100) frame.style.height = h + 'px';
+    } catch (_) {}
+  }
+
+  frame.addEventListener('load', function () {
+    resize();
+    /* observe size changes inside iframe (e.g. collapsibles) */
+    try {
+      var ro = new (frame.contentWindow.ResizeObserver || window.ResizeObserver)(resize);
+      ro.observe(frame.contentDocument.body);
+    } catch (_) {}
+  });
+})();
+
+/* ── Transcript toggle icon ── */
+(function () {
+  var el = document.getElementById('transcriptCollapse');
+  if (!el) return;
+  var icon = document.getElementById('transcriptToggleIcon');
+  el.addEventListener('show.bs.collapse',   function () { icon.textContent = '▲ comprimi'; });
+  el.addEventListener('hide.bs.collapse',   function () { icon.textContent = '▼ espandi'; });
+})();
 </script>
 {% endblock %}
