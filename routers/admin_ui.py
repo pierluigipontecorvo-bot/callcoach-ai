@@ -726,7 +726,7 @@ async def appointments_data(
     if appt_ids:
         ana_result = await db.execute(
             select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
-                   Analysis.progress, Analysis.step_message)
+                   Analysis.progress, Analysis.step_message, Analysis.created_at)
             .where(Analysis.appointment_id.in_(appt_ids))
         )
         analyses_map: dict[str, dict] = {
@@ -735,6 +735,8 @@ async def appointments_data(
                 "id": row.id,
                 "progress": row.progress or 0,
                 "step_message": row.step_message or "",
+                "created_at": row.created_at,
+                "created_display": row.created_at.strftime("%d/%m/%Y %H:%M") if row.created_at else "—",
             }
             for row in ana_result.all()
         }
