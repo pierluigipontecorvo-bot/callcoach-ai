@@ -122,10 +122,10 @@
             {{ a.dt_display }}
           </td>
 
-          {# Creato il (data analisi) #}
-          <td data-val="{{ a.analysis.created_display if a.analysis else '' }}"
+          {# Creato il (data prenotazione Acuity) #}
+          <td data-val="{{ a.created_display }}"
               style="white-space:nowrap; font-variant-numeric:tabular-nums; color:#708090; font-size:12px;">
-            {{ a.analysis.created_display if a.analysis else '—' }}
+            {{ a.created_display }}
           </td>
 
           {# Analisi #}

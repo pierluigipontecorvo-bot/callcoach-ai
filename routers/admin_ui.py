@@ -782,10 +782,19 @@ async def appointments_data(
             is_past = False
             dt_display = dt_raw[:16].replace("T", " ")
 
+        # Acuity "createdAt" = when the appointment was booked
+        created_raw = a.get("createdAt", "")
+        try:
+            created_obj = parse_iso_datetime(created_raw)
+            created_display = created_obj.strftime("%d/%m/%Y %H:%M") if created_obj else (created_raw[:16].replace("T", " ") if created_raw else "—")
+        except Exception:
+            created_display = created_raw[:16].replace("T", " ") if created_raw else "—"
+
         enriched.append({
             "id": appt_id,
             "account": a["_account"],
             "dt_display": dt_display,
+            "created_display": created_display,
             "campaign_code": campaign_code or a.get("type", "—"),
             "raw_acuity_type": a.get("type", ""),   # exact string from Acuity API
             "campaign_cfg": campaign_cfg,
