@@ -50,6 +50,16 @@
            aria-labelledby="heading-{{ section.key }}"
            data-bs-parent="#promptAccordion">
         <div class="accordion-body" style="background:#fff;">
+
+          {% if section.key == 'istruzioni_tecniche' %}
+          <div class="mb-3 p-3" style="background:#f8f9fc; border:1px solid #e2e4e9; border-radius:6px; font-size:12.5px; color:#506080;">
+            <div class="fw-semibold mb-1" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#8090a0;">Punto 1 — generato automaticamente (non editabile)</div>
+            <code style="font-size:12px; color:#405080; white-space:pre-wrap;">1. <strong>PARAMETRI DI QUALIFICAZIONE</strong> → Se definiti nella campagna: usa esclusivamente quelli.
+   Se non definiti: elenca solo le informazioni effettivamente raccolte dall'operatore.</code>
+          </div>
+          <div class="mb-1" style="font-size:12px; color:#708090;">Punti 2–4 — editabili:</div>
+          {% endif %}
+
           <div class="d-flex justify-content-between align-items-center mb-2">
             <span class="form-text mb-0">
               <span id="charcount-{{ section.key }}" class="fw-semibold">{{ section.content | length }}</span> caratteri
