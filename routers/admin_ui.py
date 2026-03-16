@@ -1089,6 +1089,84 @@ def _extract_ragione_sociale(appt: dict) -> str:
     return " ".join(p for p in parts if p).strip() or "—"
 
 
+# ── Prompt preview (/admin/ui/prompt-preview) ────────────────────────────────
+
+@router.get("/prompt-preview", response_class=HTMLResponse)
+async def prompt_preview(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    campaign_code: str = "",
+):
+    """Show the full prompt that would be sent to Claude for a given campaign."""
+    if not _is_admin(request):
+        return _login_redirect()
+
+    # Load all campaigns for the selector
+    camps_result = await db.execute(
+        select(Campaign).where(Campaign.code != "_GLOBAL_").order_by(Campaign.code)
+    )
+    all_campaigns = camps_result.scalars().all()
+
+    prompt_text = None
+    selected_campaign = None
+
+    if campaign_code:
+        # Find the campaign
+        camp_result = await db.execute(
+            select(Campaign).where(func.upper(Campaign.code) == campaign_code.strip().upper())
+        )
+        selected_campaign = camp_result.scalar_one_or_none()
+
+        # Load global docs
+        gdocs_result = await db.execute(
+            select(GlobalDocument)
+            .where(GlobalDocument.is_active == True)
+            .order_by(GlobalDocument.sort_order, GlobalDocument.id)
+        )
+        global_docs = [
+            {"title": d.title, "content": d.content}
+            for d in gdocs_result.scalars().all()
+        ]
+
+        # Load prompt sections
+        from services.prompt_db import get_prompt_sections
+        try:
+            prompt_sections = await get_prompt_sections()
+        except Exception:
+            prompt_sections = {}
+
+        # Build campaign_info dict (mirrors webhook.py)
+        from services.campaign_parser import parse_campaign_code
+        campaign_info = parse_campaign_code(campaign_code.strip())
+
+        from services.ai_analysis import build_analysis_prompt
+        prompt_text = build_analysis_prompt(
+            transcript="[— trascrizione di esempio non disponibile nell'anteprima —]",
+            campaign_info=campaign_info,
+            script=selected_campaign.script if selected_campaign else None,
+            qualification_params=selected_campaign.qualification_params if selected_campaign else None,
+            client_info=selected_campaign.client_info if selected_campaign else None,
+            operator_email="op.01.mario@effoncall.com",
+            prompt_sections=prompt_sections,
+            prompt_extra=selected_campaign.prompt_extra if selected_campaign else None,
+            global_docs=global_docs,
+        )
+
+    return templates.TemplateResponse(
+        "prompt_preview.html",
+        {
+            "request": request,
+            "active_page": "prompt",
+            "all_campaigns": all_campaigns,
+            "campaign_code": campaign_code,
+            "selected_campaign": selected_campaign,
+            "prompt_text": prompt_text,
+            "flash_ok": "",
+            "flash_err": "",
+        },
+    )
+
+
 def _parse_recipients(raw: str) -> list[str]:
     """Split a textarea (one email per line) into a list of non-empty strings."""
     return [e.strip() for e in raw.splitlines() if e.strip()]

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Anteprima Prompt — CallCoach{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">✦ Anteprima Prompt</h4>
+    <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
+      Prompt completo inviato a Claude per una campagna specifica.
+    </p>
+  </div>
+  <a href="/admin/ui/prompt" class="btn btn-outline-secondary btn-sm px-3">← Editor Prompt</a>
+</div>
+
+{# ── Campaign selector ── #}
+<form method="get" action="/admin/ui/prompt-preview" class="mb-4">
+  <div class="d-flex gap-2 align-items-end" style="max-width:600px;">
+    <div style="flex:1;">
+      <label class="form-label fw-semibold mb-1" style="font-size:13px;">Seleziona campagna</label>
+      <select name="campaign_code" class="form-select form-select-sm">
+        <option value="">— scegli una campagna —</option>
+        {% for c in all_campaigns %}
+        <option value="{{ c.code }}" {% if c.code == campaign_code %}selected{% endif %}>
+          {{ c.code }}{% if c.nome %} — {{ c.nome }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-dark btn-sm px-4">Genera anteprima</button>
+  </div>
+</form>
+
+{% if prompt_text %}
+
+{# ── Stats bar ── #}
+{% set chars = prompt_text | length %}
+{% set lines = prompt_text.split('\n') | length %}
+<div class="d-flex gap-3 mb-3" style="font-size:12px; color:#708090;">
+  <span>📋 Campagna: <strong style="color:#405080;">{{ campaign_code }}</strong></span>
+  <span>·</span>
+  <span>{{ '{:,}'.format(chars).replace(',', '.') }} caratteri</span>
+  <span>·</span>
+  <span>{{ lines }} righe</span>
+  {% if selected_campaign %}
+  <span>·</span>
+  <span>Script: <strong>{% if selected_campaign.script %}✓{% else %}—{% endif %}</strong></span>
+  <span>·</span>
+  <span>Qualificazione: <strong>{% if selected_campaign.qualification_params %}✓{% else %}—{% endif %}</strong></span>
+  {% endif %}
+</div>
+
+{# ── Prompt viewer ── #}
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Prompt completo</span>
+    <button class="btn btn-outline-secondary btn-sm px-3" onclick="copyPrompt()">📋 Copia</button>
+  </div>
+  <div class="card-body p-0">
+    <pre id="promptContent"
+         style="margin:0; padding:1.25rem; font-size:12px; line-height:1.65;
+                font-family:'Poppins', monospace; white-space:pre-wrap;
+                word-break:break-word; max-height:75vh; overflow-y:auto;
+                background:#f8f9fc; border-radius:0 0 10px 10px; color:#1a2a3a;">{{ prompt_text }}</pre>
+  </div>
+</div>
+
+{% elif campaign_code %}
+<div class="alert alert-warning" style="font-size:13px;">
+  Campagna <code>{{ campaign_code }}</code> non trovata nel database.
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center py-5" style="color:#a0aabb;">
+    <div style="font-size:32px; margin-bottom:12px;">✦</div>
+    <div style="font-size:14px; font-weight:500;">Seleziona una campagna per vedere il prompt</div>
+    <div style="font-size:12px; margin-top:6px;">
+      Il prompt include: sezioni globali, documenti della campagna, parametri di qualificazione e istruzioni tecniche.
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copyPrompt() {
+  const text = document.getElementById('promptContent').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target;
+    btn.textContent = '✓ Copiato';
+    setTimeout(() => btn.textContent = '📋 Copia', 2000);
+  });
+}
+</script>
+{% endblock %}
