@@ -321,18 +321,22 @@ async def debug_data(
     except Exception as exc:
         appts = []
 
+    from services.acuity import find_opr_field, get_operator_display
+
     acuity_appointments = [
         {
             "id": a.get("id"),
             "type": a.get("type"),
-            "has_forms": bool(a.get("forms")),
-            "form_fields": [
-                {"name": v.get("name"), "value": v.get("value")}
-                for form in (a.get("forms") or [])
-                for v in (form.get("values") or form.get("fields") or [])
-            ],
+            "nome_operatrice_raw": next(
+                (v.get("value") for form in (a.get("forms") or [])
+                 for v in (form.get("values") or [])
+                 if v.get("name") == "Nome Operatrice"),
+                "CAMPO NON TROVATO"
+            ),
+            "find_opr_field_result": find_opr_field(a),
+            "get_operator_display_result": get_operator_display(a),
         }
-        for a in appts[:5]  # solo i primi 5 per leggibilità
+        for a in appts[:10]
     ]
 
     return _JSON({"db_campaigns": db_campaigns, "acuity_appointments": acuity_appointments})
