@@ -37,6 +37,7 @@ from fastapi.templating import Jinja2Templates
 from jose import JWTError, jwt
 from sqlalchemy import delete as sa_delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from config import settings
 from database import get_db
@@ -607,6 +608,7 @@ async def mark_errore_tecnico(
         q["spiegazione"] = "Analisi non valida — errore tecnico di trascrizione."
         rj["qualificazione"] = q
     analysis.report_json = rj
+    flag_modified(analysis, "report_json")
     analysis.qualification_level = "errore_tecnico"
     await db.commit()
 

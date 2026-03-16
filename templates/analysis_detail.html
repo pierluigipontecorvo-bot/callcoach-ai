@@ -157,14 +157,23 @@
   </div>
 </div>
 
-{# ── HTML Report — full width, auto-height ── #}
-{% if analysis.report_html %}
+{# ── HTML Report — nascosto se errore tecnico, altrimenti iframe full-width ── #}
+{% if analysis.report_html and not _is_errore_tecnico %}
 <div class="mb-4" style="margin-left:-1.5rem; margin-right:-1.5rem;">
   <iframe id="reportFrame"
           srcdoc="{{ analysis.report_html | e }}"
           style="width:100%; border:none; display:block; min-height:400px;"
           scrolling="no">
   </iframe>
+</div>
+{% elif _is_errore_tecnico %}
+<div class="card mb-4 border-0" style="background:#fff8e1;">
+  <div class="card-body text-center py-5" style="color:#7f5200;">
+    <div style="font-size:40px; margin-bottom:12px;">⚠️</div>
+    <div style="font-weight:700; font-size:15px; margin-bottom:6px;">Report non disponibile</div>
+    <div style="font-size:13px;">Il report generato non è valido a causa di un errore tecnico di trascrizione.<br>
+    Utilizza il pulsante <strong>🔄 Rianalizza</strong> per generare un nuovo report.</div>
+  </div>
 </div>
 {% endif %}
 
