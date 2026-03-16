@@ -325,15 +325,14 @@ async def debug_data(
         {
             "id": a.get("id"),
             "type": a.get("type"),
-            "type_repr": repr(a.get("type")),
             "has_forms": bool(a.get("forms")),
-            "form_field_names": [
-                v.get("name")
+            "form_fields": [
+                {"name": v.get("name"), "value": v.get("value")}
                 for form in (a.get("forms") or [])
                 for v in (form.get("values") or form.get("fields") or [])
             ],
         }
-        for a in appts[:20]
+        for a in appts[:5]  # solo i primi 5 per leggibilità
     ]
 
     return _JSON({"db_campaigns": db_campaigns, "acuity_appointments": acuity_appointments})
