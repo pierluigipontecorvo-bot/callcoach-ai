@@ -5,9 +5,40 @@
 
 {% block content %}
 
-{# ── NON IN TARGET banner ── #}
 {% set _qual = (analysis.report_json or {}).get('qualificazione', {}) %}
-{% if _qual.get('fuori_parametro') %}
+{% set _is_errore_tecnico = (analysis.report_json or {}).get('errore_tecnico', false) %}
+
+{# ── Flash messages ── #}
+{% if flash_ok %}
+<div class="alert alert-success alert-dismissible py-2 mb-3" style="font-size:13px;">
+  {{ flash_ok }}
+  <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if flash_err %}
+<div class="alert alert-danger alert-dismissible py-2 mb-3" style="font-size:13px;">
+  {{ flash_err }}
+  <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{# ── ERRORE TECNICO banner (ha priorità su NON IN TARGET) ── #}
+{% if _is_errore_tecnico %}
+<div class="d-flex align-items-start gap-3 mb-4 p-3 px-4"
+     style="background:#fff8e1; border:1.5px solid #f9a825; border-radius:10px; border-left:5px solid #f57f17;">
+  <span style="font-size:26px; line-height:1;">⚠️</span>
+  <div>
+    <div style="font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; color:#e65100; letter-spacing:.2px;">
+      ERRORE TECNICO — ANALISI NON VALIDA
+    </div>
+    <div style="font-size:13px; color:#7f5200; margin-top:3px; line-height:1.5;">
+      La trascrizione audio non era leggibile. Il report generato non è attendibile e non deve essere considerato ai fini della valutazione dell'operatore.
+    </div>
+  </div>
+</div>
+
+{# ── NON IN TARGET banner (solo se non errore tecnico) ── #}
+{% elif _qual.get('fuori_parametro') %}
 <div class="d-flex align-items-start gap-3 mb-4 p-3 px-4"
      style="background:#fdecea; border:1.5px solid #e57373; border-radius:10px; border-left:5px solid #c0392b;">
   <span style="font-size:26px; line-height:1;">⛔</span>
@@ -36,7 +67,19 @@
       {% if analysis.operator_name %}&mdash; <strong>{{ analysis.operator_name }}</strong>{% endif %}
     </p>
   </div>
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 flex-wrap">
+    {# Rianalizza #}
+    <form method="post" action="/admin/ui/analyses/{{ analysis.id }}/rianalizza"
+          onsubmit="return confirm('Riavviare l\'analisi? Il report attuale verrà sovrascritto.');">
+      <button type="submit" class="btn btn-outline-primary btn-sm">🔄 Rianalizza</button>
+    </form>
+    {# Segna errore tecnico (solo se non già segnato) #}
+    {% if not _is_errore_tecnico %}
+    <form method="post" action="/admin/ui/analyses/{{ analysis.id }}/mark-errore-tecnico"
+          onsubmit="return confirm('Contrassegnare come errore tecnico? L\'analisi verrà marcata come non valida.');">
+      <button type="submit" class="btn btn-outline-warning btn-sm">⚠️ Errore tecnico</button>
+    </form>
+    {% endif %}
     {% if analysis.report_html %}
     <a href="/admin/ui/analyses/{{ analysis.id }}/print" target="_blank"
        class="btn btn-outline-secondary btn-sm">↗ Stampa / PDF</a>
@@ -73,7 +116,9 @@
       </div>
       <div class="col-6 col-md-3">
         <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Qualificazione</div>
-        {% if _qual.get('fuori_parametro') %}
+        {% if _is_errore_tecnico %}
+          <span class="badge" style="background:#e65100; font-size:11px;">⚠️ ERRORE TECNICO</span>
+        {% elif _qual.get('fuori_parametro') %}
           <span class="badge" style="background:#c0392b; font-size:11px;">⛔ NON IN TARGET</span>
         {% elif analysis.qualification_level == 'buona' %}
           <span class="badge bg-success">buona</span>

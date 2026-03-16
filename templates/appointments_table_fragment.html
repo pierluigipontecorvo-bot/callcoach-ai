@@ -132,7 +132,12 @@
           <td style="min-width:120px;"
               data-val="{{ a.analysis.status if a.analysis else '' }}">
             {% if a.analysis %}
-              {% if a.analysis.status == "completed" %}
+              {% if a.analysis.qualification_level == "errore_tecnico" %}
+                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
+                   class="badge text-decoration-none" style="font-size:11px; background:#e65100;">
+                  ⚠️ Errore tecnico
+                </a>
+              {% elif a.analysis.status == "completed" %}
                 <a href="/admin/ui/analyses/{{ a.analysis.id }}"
                    class="badge bg-success text-decoration-none" style="font-size:11px;">
                   ✓ Completata

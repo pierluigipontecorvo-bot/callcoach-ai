@@ -557,6 +557,8 @@ async def analysis_detail(
     analysis_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    ok: str = "",
+    err: str = "",
 ):
     if not _is_admin(request):
         return _login_redirect()
@@ -572,8 +574,80 @@ async def analysis_detail(
             "request": request,
             "analysis": analysis,
             "active_page": "analyses",
+            "flash_ok": ok,
+            "flash_err": err,
         },
     )
+
+
+# ── Mark as errore tecnico ────────────────────────────────────────────────────
+
+@router.post("/analyses/{analysis_id}/mark-errore-tecnico")
+async def mark_errore_tecnico(
+    analysis_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    from urllib.parse import quote
+
+    result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        return RedirectResponse(url="/admin/ui/analyses", status_code=303)
+
+    # Flag in report_json + reset fuori_parametro so banner won't show as NON IN TARGET
+    rj = dict(analysis.report_json or {})
+    rj["errore_tecnico"] = True
+    if "qualificazione" in rj:
+        q = dict(rj["qualificazione"])
+        q["fuori_parametro"] = False
+        q["spiegazione"] = "Analisi non valida — errore tecnico di trascrizione."
+        rj["qualificazione"] = q
+    analysis.report_json = rj
+    analysis.qualification_level = "errore_tecnico"
+    await db.commit()
+
+    msg = quote("Analisi contrassegnata come errore tecnico.")
+    return RedirectResponse(url=f"/admin/ui/analyses/{analysis_id}?ok={msg}", status_code=303)
+
+
+# ── Re-run analysis from detail page ─────────────────────────────────────────
+
+@router.post("/analyses/{analysis_id}/rianalizza")
+async def rianalizza_from_detail(
+    analysis_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    from services.acuity import get_appointment
+    from routers.webhook import run_analysis_pipeline
+    from urllib.parse import quote
+
+    result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        return RedirectResponse(url="/admin/ui/analyses", status_code=303)
+
+    full_appointment = await get_appointment(analysis.appointment_id, analysis.acuity_account)
+    if not full_appointment:
+        msg = quote(f"Impossibile recuperare l'appuntamento {analysis.appointment_id} da Acuity.")
+        return RedirectResponse(url=f"/admin/ui/analyses/{analysis_id}?err={msg}", status_code=303)
+
+    background_tasks.add_task(
+        run_analysis_pipeline,
+        appointment_data=full_appointment,
+        acuity_account=analysis.acuity_account,
+    )
+
+    msg = quote("Rianalisi avviata. Aggiorna la pagina tra qualche minuto per il risultato aggiornato.")
+    return RedirectResponse(url=f"/admin/ui/analyses/{analysis_id}?ok={msg}", status_code=303)
 
 
 # ── Analysis print / PDF ──────────────────────────────────────────────────────
@@ -726,7 +800,8 @@ async def appointments_data(
     if appt_ids:
         ana_result = await db.execute(
             select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
-                   Analysis.progress, Analysis.step_message, Analysis.created_at)
+                   Analysis.progress, Analysis.step_message, Analysis.created_at,
+                   Analysis.qualification_level)
             .where(Analysis.appointment_id.in_(appt_ids))
         )
         analyses_map: dict[str, dict] = {
@@ -737,6 +812,7 @@ async def appointments_data(
                 "step_message": row.step_message or "",
                 "created_at": row.created_at,
                 "created_display": row.created_at.strftime("%d/%m/%Y %H:%M") if row.created_at else "—",
+                "qualification_level": row.qualification_level or "",
             }
             for row in ana_result.all()
         }
