@@ -323,21 +323,25 @@ async def debug_data(
 
     from services.acuity import find_opr_field, get_operator_display
 
-    acuity_appointments = [
-        {
+    acuity_appointments = []
+    for a in appts[:30]:
+        op_result = get_operator_display(a)
+        all_form_fields = [
+            {
+                "form_name": form.get("name", ""),
+                "field_name": v.get("name", ""),
+                "value": v.get("value", ""),
+            }
+            for form in (a.get("forms") or [])
+            for v in (form.get("values") or [])
+        ]
+        acuity_appointments.append({
             "id": a.get("id"),
             "type": a.get("type"),
-            "nome_operatrice_raw": next(
-                (v.get("value") for form in (a.get("forms") or [])
-                 for v in (form.get("values") or [])
-                 if v.get("name") == "Nome Operatrice"),
-                "CAMPO NON TROVATO"
-            ),
             "find_opr_field_result": find_opr_field(a),
-            "get_operator_display_result": get_operator_display(a),
-        }
-        for a in appts[:10]
-    ]
+            "get_operator_display_result": op_result,
+            "all_form_fields": all_form_fields,
+        })
 
     return _JSON({"db_campaigns": db_campaigns, "acuity_appointments": acuity_appointments})
 
