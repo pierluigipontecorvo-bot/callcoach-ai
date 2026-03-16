@@ -647,6 +647,15 @@ async def appointments_data(
             )
 
         op_display = get_operator_display(a)
+        # If form field empty → fall back to operator info embedded in the type name
+        # e.g. "AVANZ-AVI-0000-0085-ALESSANDRO-(AR)" → "0085-ALESSANDRO"
+        if (not op_display or op_display == "—" or op_display.endswith("-—")) and parsed.get("valid") and parsed.get("agente"):
+            agente = parsed["agente"]
+            if parsed.get("is_multisede"):
+                codice_parts = parsed["codice"].split("-")
+                op_display = f"{codice_parts[1]}-{agente}" if len(codice_parts) >= 2 else agente
+            else:
+                op_display = agente
         ragione = extract_ragione_sociale(a) or "—"
 
         labels = [
