@@ -177,8 +177,8 @@
 </div>
 {% endif %}
 
-{# ── Trascrizione ── #}
-{% if analysis.transcript %}
+{# ── Trascrizione — nascosta se errore tecnico ── #}
+{% if analysis.transcript and not _is_errore_tecnico %}
 <div class="card shadow-sm mb-4">
   <div class="card-header d-flex justify-content-between align-items-center"
        style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#transcriptCollapse">
@@ -186,8 +186,8 @@
     <span id="transcriptToggleIcon" style="font-size:11px; color:#708090;">▼ espandi</span>
   </div>
   <div class="collapse" id="transcriptCollapse">
-    <div class="card-body" style="overflow-y:auto; max-height:60vh;">
-      <pre class="mb-0" style="white-space:pre-wrap; font-size:13px; line-height:1.7; color:#2a2a3a;">{{ analysis.transcript }}</pre>
+    <div class="card-body" style="overflow-y:auto; max-height:40vh;">
+      <pre class="mb-0" style="white-space:pre-wrap; font-size:12px; line-height:1.6; color:#2a2a3a;">{{ analysis.transcript }}</pre>
     </div>
   </div>
 </div>

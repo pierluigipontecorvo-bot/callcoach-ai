@@ -99,7 +99,15 @@ def _transcribe_sync(file_path: str) -> str:
         file_path,
         language="it",
         task="transcribe",
-        fp16=False,   # CPU-only on Railway
+        fp16=False,           # CPU-only on Railway
         verbose=False,
+        # Qualità migliorata: riduce allucinazioni e testo ripetitivo
+        condition_on_previous_text=False,
+        no_speech_threshold=0.6,
+        compression_ratio_threshold=2.4,
+        initial_prompt=(
+            "Trascrizione di una telefonata commerciale B2B in italiano. "
+            "L'operatore propone un servizio di logistica/spedizioni a un'azienda."
+        ),
     )
     return result["text"].strip()
