@@ -86,6 +86,13 @@ def build_analysis_prompt(
 
     # ── Build documents section ───────────────────────────────────────────────
     docs_parts = []
+
+    # Documenti globali (metodologia, framework, teoria) — sempre prima
+    _global_docs = secs.get("documenti_globali", "").strip()
+    if _global_docs:
+        docs_parts.append(f"### METODOLOGIA E LINEE GUIDA GENERALI\n{_global_docs}")
+
+    # Documenti specifici della campagna
     if client_info:
         docs_parts.append(f"### INFORMAZIONI SUL CLIENTE E SUL SERVIZIO\n{client_info}")
     if script:

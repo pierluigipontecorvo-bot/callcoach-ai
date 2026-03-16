@@ -1,7 +1,7 @@
 """
 Prompt section management service.
 
-Loads the 7 editable sections of the AI analysis prompt from the DB,
+Loads the 8 editable sections of the AI analysis prompt from the DB,
 falling back to hardcoded defaults when not overridden.
 Results are cached for 60 seconds to avoid redundant DB calls.
 """
@@ -57,6 +57,7 @@ _DEFAULT_SECTIONS: dict[str, str] = {
         "4. **TRASCRIZIONE** → Cita sempre frasi ESATTE dalla trascrizione per i punti di forza, le aree di miglioramento e gli esempi pratici. Non parafrasare: usa le parole esatte dell'operatore tra virgolette."
     ),
     "altre_istruzioni": "",
+    "documenti_globali": "",
 }
 
 # ── Section metadata for the UI ───────────────────────────────────────────────
@@ -100,6 +101,15 @@ SECTION_METADATA = [
             "Il punto 1 sulla qualificazione è generato automaticamente in base ai parametri della campagna."
         ),
         "rows": 8,
+    },
+    {
+        "key": "documenti_globali",
+        "title": "Documenti globali",
+        "description": (
+            "La 'mappa' teorica: metodologia, framework di comunicazione, best practice EC. "
+            "Appare in DOCUMENTI DI RIFERIMENTO per tutte le campagne, prima dei documenti specifici."
+        ),
+        "rows": 15,
     },
     {
         "key": "altre_istruzioni",
