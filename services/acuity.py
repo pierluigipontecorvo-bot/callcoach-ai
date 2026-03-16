@@ -225,27 +225,6 @@ def get_operator_display(appointment_data: dict) -> str:
     if email:
         return format_operator_display(email)
 
-    # 3. Any op.XX.*@* email (Gmail etc.) — extract number only
-    def _find_op_num(v: object) -> str:
-        if isinstance(v, str):
-            m = _ANY_OP_EMAIL_RE.search(v)
-            return m.group(1) if m else ""
-        if isinstance(v, dict):
-            for x in v.values():
-                r = _find_op_num(x)
-                if r:
-                    return r
-        if isinstance(v, list):
-            for x in v:
-                r = _find_op_num(x)
-                if r:
-                    return r
-        return ""
-
-    op_num = _find_op_num(appointment_data)
-    if op_num:
-        return f"{op_num}-—"
-
     return "—"
 
 
