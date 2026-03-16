@@ -371,6 +371,55 @@ async def campaign_delete(
     return RedirectResponse(url=f"/admin/ui/campaigns?ok={msg}", status_code=303)
 
 
+# ── Duplicate campaign ────────────────────────────────────────────────────────
+
+@router.post("/campaigns/{campaign_id}/duplicate")
+async def campaign_duplicate(
+    campaign_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    new_code: str = Form(...),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    from urllib.parse import quote
+
+    new_code = new_code.strip().upper()
+    if not new_code:
+        msg = quote("Il codice non può essere vuoto.")
+        return RedirectResponse(url=f"/admin/ui/campaigns?err={msg}", status_code=303)
+
+    # Load original
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
+    original = result.scalar_one_or_none()
+    if not original:
+        return RedirectResponse(url="/admin/ui/campaigns", status_code=303)
+
+    # Check new code uniqueness
+    existing = await db.execute(select(Campaign).where(Campaign.code == new_code))
+    if existing.scalar_one_or_none():
+        msg = quote(f"Esiste già una configurazione con codice «{new_code}».")
+        return RedirectResponse(url=f"/admin/ui/campaigns?err={msg}", status_code=303)
+
+    new_camp = Campaign(
+        code=new_code,
+        nome=original.nome,
+        type=original.type,
+        script=original.script,
+        qualification_params=original.qualification_params,
+        client_info=original.client_info,
+        email_recipients=list(original.email_recipients) if original.email_recipients else [],
+        notes=original.notes,
+        active=original.active,
+    )
+    db.add(new_camp)
+    await db.commit()
+
+    msg = quote(f"Configurazione «{new_code}» creata come copia di «{original.code}».")
+    return RedirectResponse(url=f"/admin/ui/campaigns?ok={msg}", status_code=303)
+
+
 # ── Analyses list ─────────────────────────────────────────────────────────────
 
 @router.get("/analyses", response_class=HTMLResponse)

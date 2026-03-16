@@ -79,9 +79,17 @@
             {% endif %}
           </td>
           <td class="text-muted small">{{ c.updated_at.strftime('%d/%m/%Y') }}</td>
-          <td>
+          <td class="text-nowrap">
             <a href="/admin/ui/campaigns/{{ c.id }}/edit"
-               class="btn btn-sm btn-outline-secondary">Modifica</a>
+               class="btn btn-sm btn-outline-secondary me-1">Modifica</a>
+            <button type="button"
+                    class="btn btn-sm btn-outline-primary me-1"
+                    onclick="openDuplicate({{ c.id }}, '{{ c.code }}')">Duplica</button>
+            <form method="post" action="/admin/ui/campaigns/{{ c.id }}/delete"
+                  class="d-inline"
+                  onsubmit="return confirm('Eliminare la configurazione «{{ c.code }}»?\nQuesta azione non può essere annullata.')">
+              <button type="submit" class="btn btn-sm btn-outline-danger">Elimina</button>
+            </form>
           </td>
         </tr>
         {% endfor %}
@@ -102,5 +110,48 @@
   <a href="/admin/ui/campaigns/new" class="btn btn-dark">Crea la prima configurazione</a>
 </div>
 {% endif %}
+
+<!-- Modal Duplica campagna -->
+<div class="modal fade" id="duplicateModal" tabindex="-1" aria-labelledby="duplicateModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form method="post" id="duplicateForm" action="">
+        <div class="modal-header">
+          <h5 class="modal-title" id="duplicateModalLabel">Duplica configurazione</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-3">
+            Verrà creata una copia della configurazione con il nuovo codice indicato.
+            Tutti i campi (script, qualificazione, email, ecc.) saranno copiati.
+          </p>
+          <label for="newCodeInput" class="form-label fw-semibold">Nuovo codice campagna</label>
+          <input type="text" class="form-control font-monospace" id="newCodeInput"
+                 name="new_code" required autocomplete="off"
+                 placeholder="es. INTER-CLI-0001">
+          <div class="form-text">Il codice deve essere univoco e in maiuscolo.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+          <button type="submit" class="btn btn-primary">Crea duplicato</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function openDuplicate(id, code) {
+  const modal = new bootstrap.Modal(document.getElementById('duplicateModal'));
+  document.getElementById('duplicateForm').action = '/admin/ui/campaigns/' + id + '/duplicate';
+  document.getElementById('newCodeInput').value = code + '-COPIA';
+  modal.show();
+  setTimeout(() => {
+    const inp = document.getElementById('newCodeInput');
+    inp.focus();
+    inp.select();
+  }, 300);
+}
+</script>
 
 {% endblock %}
