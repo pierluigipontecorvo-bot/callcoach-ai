@@ -922,6 +922,29 @@ async def appointments_data(
     )
 
 
+@router.get("/appointments/status-poll")
+async def appointments_status_poll(request: Request, db: AsyncSession = Depends(get_db)):
+    """Lightweight JSON endpoint — returns only in-progress analysis statuses."""
+    _require_auth(request)
+    result = await db.execute(
+        select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
+               Analysis.qualification_level, Analysis.progress, Analysis.step_message)
+        .where(Analysis.processing_status.in_(["processing", "pending"]))
+    )
+    items = [
+        {
+            "appt_id": row.appointment_id,
+            "status": row.processing_status,
+            "analysis_id": row.id,
+            "qualification_level": row.qualification_level or "",
+            "progress": row.progress or 0,
+            "step_message": row.step_message or "",
+        }
+        for row in result.all()
+    ]
+    return JSONResponse({"items": items, "has_processing": len(items) > 0})
+
+
 @router.post("/appointments/{account_id}/{appointment_id}/analyze")
 async def trigger_appointment_analysis(
     account_id: int,

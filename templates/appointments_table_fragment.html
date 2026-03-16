@@ -38,7 +38,7 @@
       </thead>
       <tbody>
         {% for a in appointments %}
-        <tr>
+        <tr data-appt-id="{{ a.id }}"
 
           {# Campagna #}
           <td data-val="{{ a.campaign_code }}">
@@ -130,6 +130,7 @@
 
           {# Analisi #}
           <td style="min-width:120px;"
+              data-poll-cell
               data-val="{{ a.analysis.status if a.analysis else '' }}">
             {% if a.analysis %}
               {% if a.analysis.qualification_level == "errore_tecnico" %}

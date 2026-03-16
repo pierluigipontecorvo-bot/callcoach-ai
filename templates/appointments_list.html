@@ -153,9 +153,9 @@
           var sub = wrapper.getAttribute('data-subtitle');
           if (sub) document.getElementById('appt-subtitle').textContent = sub;
 
-          /* auto-poll if any analysis is still processing — silently */
+          /* start lightweight cell-only poll if any analysis is in progress */
           if (wrapper.getAttribute('data-auto-reload') === 'true') {
-            _reloadTimer = setTimeout(function () { window.loadAppts(false, true); }, 4000);
+            _reloadTimer = setTimeout(pollStatuses, 3000);
           }
         }
 
@@ -169,10 +169,51 @@
             '<a href="#" onclick="loadAppts(true);return false;">Riprova</a></div>';
         }
         document.getElementById('appt-refresh').style.display = '';
-        /* retry after 10s on error */
-        _reloadTimer = setTimeout(function () { window.loadAppts(false, true); }, 10000);
+        _reloadTimer = setTimeout(pollStatuses, 10000);
       });
   };
+
+  /* ── Lightweight status poll — updates only Analisi cells, no table flicker ── */
+  function renderProgressCell(item) {
+    if (item.status === 'processing' || item.status === 'pending') {
+      return '<div style="font-size:10px;color:#888;">' +
+        (item.step_message || 'In corso...') + ' ' + item.progress + '%</div>' +
+        '<div class="progress" style="height:5px;margin-top:2px;">' +
+        '<div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" ' +
+        'style="width:' + item.progress + '%"></div></div>';
+    }
+    return null;
+  }
+
+  function pollStatuses() {
+    if (_reloadTimer) { clearTimeout(_reloadTimer); _reloadTimer = null; }
+    fetch('/admin/ui/appointments/status-poll', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var needFullReload = false;
+        data.items.forEach(function (item) {
+          var row = document.querySelector('tr[data-appt-id="' + item.appt_id + '"]');
+          if (!row) { needFullReload = true; return; }
+          var cell = row.querySelector('td[data-poll-cell]');
+          if (!cell) return;
+          var html = renderProgressCell(item);
+          if (html) {
+            cell.innerHTML = html;
+          }
+        });
+        if (needFullReload) {
+          window.loadAppts(false, true);
+        } else if (data.has_processing) {
+          _reloadTimer = setTimeout(pollStatuses, 3000);
+        } else {
+          /* all done — one final full reload to show completed badges */
+          window.loadAppts(false, true);
+        }
+      })
+      .catch(function () {
+        _reloadTimer = setTimeout(pollStatuses, 8000);
+      });
+  }
 
   document.addEventListener('DOMContentLoaded', function () { window.loadAppts(false); });
 })();
