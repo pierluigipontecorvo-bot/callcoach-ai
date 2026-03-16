@@ -122,22 +122,18 @@
 </div>
 {% endif %}
 
-{# ── Transcript ── #}
+{# ── Transcript (collapsed by default) ── #}
 {% if analysis.transcript %}
 <div class="card shadow-sm mb-4">
-  <div class="card-header fw-semibold">Trascrizione</div>
-  <div class="card-body" style="max-height:400px; overflow-y:auto;">
-    <pre class="mb-0" style="white-space:pre-wrap; font-size:13px; line-height:1.6;">{{ analysis.transcript }}</pre>
+  <div class="card-header fw-semibold d-flex justify-content-between align-items-center"
+       style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#transcriptCollapse">
+    <span>Trascrizione</span>
+    <span style="font-size:12px; color:#708090; font-weight:400;">▼ espandi</span>
   </div>
-</div>
-{% endif %}
-
-{# ── JSON Report (raw) ── #}
-{% if analysis.report_json %}
-<div class="card shadow-sm mb-4">
-  <div class="card-header fw-semibold">JSON grezzo</div>
-  <div class="card-body" style="max-height:400px; overflow-y:auto;">
-    <pre class="mb-0" style="font-size:12px; line-height:1.5;">{{ analysis.report_json | tojson(indent=2) }}</pre>
+  <div class="collapse" id="transcriptCollapse">
+    <div class="card-body" style="max-height:500px; overflow-y:auto;">
+      <pre class="mb-0" style="white-space:pre-wrap; font-size:13px; line-height:1.6;">{{ analysis.transcript }}</pre>
+    </div>
   </div>
 </div>
 {% endif %}

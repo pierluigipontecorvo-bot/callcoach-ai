@@ -128,7 +128,10 @@ def build_analysis_prompt(
             '1. **PARAMETRI DI QUALIFICAZIONE** → Sezione "### PARAMETRI DI QUALIFICAZIONE" nei documenti sopra.\n'
             '   ⚠️ Verifica ESCLUSIVAMENTE i parametri elencati in quella sezione. '
             'NON aggiungere parametri non esplicitamente indicati (es. numero dipendenti, fatturato, '
-            'dimensione aziendale, ecc.) anche se sembrano rilevanti per il settore B2B.'
+            'dimensione aziendale, ecc.) anche se sembrano rilevanti per il settore B2B.\n'
+            '   ⚠️ SOGLIE MINIME: se un parametro ha un valore minimo richiesto (es. "spesa minima 12.000€/anno") '
+            'e il prospect non lo raggiunge, imposta "fuori_parametro": true, assegna rating 1 e spiega '
+            'chiaramente nella spiegazione che l\'appuntamento NON è valido perché la soglia non è stata raggiunta.'
         )
     else:
         qual_instruction = (
@@ -136,8 +139,8 @@ def build_analysis_prompt(
             'per questa campagna: la qualificazione non viene valutata.\n'
             '   In "parametri_verificati": inserisci [] (array vuoto).\n'
             '   In "parametri_mancanti": inserisci [] (array vuoto).\n'
-            '   In "sintesi": scrivi "Parametri di qualificazione non definiti per questa campagna."\n'
-            '   Assegna "rating": 2 (neutro). NON inventare parametri.'
+            '   In "spiegazione": scrivi "Parametri di qualificazione non definiti per questa campagna."\n'
+            '   Imposta "fuori_parametro": false. Assegna "rating": 3 (neutro). NON inventare parametri.'
         )
 
     # Build optional extra sections
@@ -224,9 +227,10 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
   "ora_appuntamento": "HH:MM o null se non trovata",
 
   "qualificazione": {{
-    "rating": 2,
-    "label": "DA MIGLIORARE",
-    "spiegazione": "Spiegazione sintetica in circa 30 parole del perché di questo rating",
+    "rating": 3,
+    "label": "SUFFICIENTE",
+    "fuori_parametro": false,
+    "spiegazione": "Spiegazione sintetica in circa 30 parole del perché di questo rating. Se fuori_parametro=true, indica esplicitamente quale soglia minima non è stata raggiunta.",
     "parametri_verificati": [
       "Nome parametro: valore raccolto nella chiamata"
     ],
@@ -236,11 +240,11 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
   }},
 
   "analisi_telefonata": {{
-    "rating_totale": 2,
+    "rating_totale": 3,
     "spiegazione_totale": "Spiegazione sintetica in circa 30 parole del rating complessivo della telefonata",
     "fasi": {{
       "apertura": {{
-        "rating": 2,
+        "rating": 3,
         "spiegazione": "Spiegazione in circa 30 parole"
       }},
       "superamento_gatekeeper": {{
@@ -248,11 +252,11 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
         "spiegazione": "Non applicabile (chiamata diretta al DM) OPPURE spiegazione in circa 30 parole se presente"
       }},
       "introduzione_decision_maker": {{
-        "rating": 2,
+        "rating": 3,
         "spiegazione": "Spiegazione in circa 30 parole"
       }},
       "trasmissione_valore": {{
-        "rating": 2,
+        "rating": 3,
         "spiegazione": "Spiegazione in circa 30 parole"
       }},
       "superamento_obiezioni": {{
@@ -260,11 +264,11 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
         "spiegazione": "Non applicabile (nessuna obiezione) OPPURE spiegazione in circa 30 parole se presente"
       }},
       "negoziazione": {{
-        "rating": 2,
+        "rating": 3,
         "spiegazione": "Spiegazione in circa 30 parole"
       }},
       "chiusura": {{
-        "rating": 2,
+        "rating": 3,
         "spiegazione": "Spiegazione in circa 30 parole"
       }}
     }}
@@ -314,11 +318,22 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
   "disclaimer": "Questo report è generato automaticamente da un sistema di intelligenza artificiale sulla base della trascrizione audio della chiamata. I giudizi espressi sono indicativi e a scopo formativo. La qualità dell'analisi dipende dalla fedeltà della trascrizione, che potrebbe contenere imprecisioni legate a rumori di fondo, sovrapposizione di voci o accenti. Utilizzare come strumento di supporto al coaching, non come valutazione definitiva."
 }}
 
-Scala di rating (valida per qualificazione E per ogni singola fase):
-- 1 = INACCURATA / INSUFFICIENTE: mancanze significative, non rispetta i requisiti minimi
-- 2 = DA MIGLIORARE: sufficiente ma con lacune importanti da correggere
-- 3 = BUONA: eseguita correttamente, in linea con le aspettative
-- null = NON APPLICABILE (fase non presente nella chiamata — usa null senza virgolette, non "N/A" né 0)"""
+Scala di rating da 1 a 5 (valida per qualificazione E per ogni singola fase):
+- 1 = INSUFFICIENTE: gravemente carente, molto lontano dagli standard richiesti
+- 2 = DA MIGLIORARE: sotto le aspettative, lacune significative da correggere
+- 3 = SUFFICIENTE: nella norma, eseguito ma con margini importanti di miglioramento
+- 4 = BUONA: eseguita bene, in linea con le aspettative e i framework di riferimento
+- 5 = ECCELLENTE: esecuzione esemplare, supera le aspettative
+- null = NON APPLICABILE (fase non presente nella chiamata — usa null senza virgolette, non "N/A" né 0)
+
+Label corrispondenti ai rating (usa SEMPRE la label corretta nel campo "label"):
+- 1 → "INSUFFICIENTE"
+- 2 → "DA MIGLIORARE"
+- 3 → "SUFFICIENTE"
+- 4 → "BUONA"
+- 5 → "ECCELLENTE"
+
+⚠️ APPUNTAMENTO FUORI PARAMETRO: se "fuori_parametro" è true nella qualificazione, assegna SEMPRE rating 1 e spiega nella "spiegazione" quale soglia minima non è stata raggiunta (es. "Spesa dichiarata 5.000€/anno — sotto la soglia minima richiesta di 12.000€/anno. Appuntamento non valido.")"""
 
 
 # ── Analysis call ──────────────────────────────────────────────────────────────
@@ -387,7 +402,7 @@ async def analyze_call(
     report.setdefault("data_appuntamento", None)
     report.setdefault("ora_appuntamento", None)
     report.setdefault("qualificazione", {
-        "rating": 2, "label": "DA MIGLIORARE",
+        "rating": 3, "label": "SUFFICIENTE", "fuori_parametro": False,
         "spiegazione": "", "parametri_verificati": [], "parametri_mancanti": [],
     })
     report.setdefault("analisi_telefonata", {

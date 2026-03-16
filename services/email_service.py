@@ -110,18 +110,18 @@ async def send_analysis_report(
 # ── HTML helpers ───────────────────────────────────────────────────────────────
 
 def _rating_badge(rating) -> str:
-    """Render a coloured ●●○ badge for a 1-3 rating (or — for null)."""
+    """Render a coloured ●●○ badge for a 1-5 rating (or — for null)."""
     if rating is None:
         return '<span style="color:#bdc3c7;font-size:13px">— non applicabile</span>'
-    colors = {1: "#c0392b", 2: "#d35400", 3: "#1e8449"}
-    labels = {1: "Inaccurata", 2: "Da migliorare", 3: "Buona"}
+    colors = {1: "#c0392b", 2: "#e67e22", 3: "#d4ac0d", 4: "#27ae60", 5: "#1a5276"}
+    labels = {1: "Insufficiente", 2: "Da migliorare", 3: "Sufficiente", 4: "Buona", 5: "Eccellente"}
     color  = colors.get(rating, "#708090")
     label  = labels.get(rating, str(rating))
-    filled = "●" * rating + "○" * (3 - rating)
+    filled = "●" * rating + "○" * (5 - rating)
     return (
         f'<span style="color:{color};font-size:16px;letter-spacing:3px">{filled}</span>'
         f'&nbsp;<span style="color:{color};font-weight:700;font-size:12px;letter-spacing:.3px">'
-        f'{rating}/3 — {label}</span>'
+        f'{rating}/5 — {label}</span>'
     )
 
 
@@ -152,9 +152,10 @@ def generate_html_report(
     qual        = report.get("qualificazione", {})
     analisi     = report.get("analisi_telefonata", {})
     fasi        = analisi.get("fasi", {})
-    qual_rating = qual.get("rating", 2)
+    qual_rating      = qual.get("rating", 3)
+    fuori_parametro  = qual.get("fuori_parametro", False)
 
-    rating_colors = {1: "#e74c3c", 2: "#e67e22", 3: "#27ae60"}
+    rating_colors = {1: "#c0392b", 2: "#e67e22", 3: "#d4ac0d", 4: "#27ae60", 5: "#1a5276"}
     accent_color  = rating_colors.get(qual_rating, "#2980b9")
 
     operator_name  = operator_name or "N/A"
@@ -296,6 +297,7 @@ def generate_html_report(
 <!-- ─── QUALIFICAZIONE ─── -->
 <div class="card">
   <div class="section-title">Qualificazione</div>
+  {'<div style="background:#fdecea;border:2px solid #c0392b;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;font-weight:700;color:#c0392b;letter-spacing:.2px">⛔ APPUNTAMENTO FUORI PARAMETRO — Le soglie minime di qualificazione non sono state raggiunte.</div>' if fuori_parametro else ''}
   <div style="margin:6px 0 10px">{_rating_badge(qual_rating)}</div>
   <p style="font-size:13px;color:#444;margin:8px 0;line-height:1.6">{qual.get('spiegazione', '')}</p>
 
