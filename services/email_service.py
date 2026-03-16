@@ -297,7 +297,7 @@ def generate_html_report(
 <!-- ─── QUALIFICAZIONE ─── -->
 <div class="card">
   <div class="section-title">Qualificazione</div>
-  {'<div style="background:#fdecea;border:2px solid #c0392b;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;font-weight:700;color:#c0392b;letter-spacing:.2px">⛔ APPUNTAMENTO FUORI PARAMETRO — Le soglie minime di qualificazione non sono state raggiunte.</div>' if fuori_parametro else ''}
+  {'<div style="background:#fdecea;border:2px solid #c0392b;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:14px;font-weight:700;color:#c0392b;letter-spacing:.3px;text-align:center">⛔ APPUNTAMENTO NON IN TARGET</div>' if fuori_parametro else ''}
   <div style="margin:6px 0 10px">{_rating_badge(qual_rating)}</div>
   <p style="font-size:13px;color:#444;margin:8px 0;line-height:1.6">{qual.get('spiegazione', '')}</p>
 

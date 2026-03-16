@@ -126,17 +126,33 @@ def build_analysis_prompt(
     if qualification_params:
         qual_instruction = (
             '1. **PARAMETRI DI QUALIFICAZIONE** → Sezione "### PARAMETRI DI QUALIFICAZIONE" nei documenti sopra.\n'
-            '   ⚠️ Verifica ESCLUSIVAMENTE i parametri elencati in quella sezione. '
-            'NON aggiungere parametri non esplicitamente indicati (es. numero dipendenti, fatturato, '
-            'dimensione aziendale, ecc.) anche se sembrano rilevanti per il settore B2B.\n'
-            '   ⚠️ SOGLIE MINIME: se un parametro ha un valore minimo richiesto (es. "spesa minima 12.000€/anno") '
-            'e il prospect non lo raggiunge, imposta "fuori_parametro": true, assegna rating 1 e spiega '
-            'chiaramente nella spiegazione che l\'appuntamento NON è valido perché la soglia non è stata raggiunta.'
+            '   Verifica ESCLUSIVAMENTE i parametri elencati in quella sezione. NON aggiungere parametri non indicati.\n\n'
+            '   REGOLE DI CLASSIFICAZIONE — rispettale in ordine:\n\n'
+            '   a) PARAMETRI NON RICHIESTI: se l\'operatore non ha chiesto un parametro obbligatorio durante la chiamata,\n'
+            '      inseriscilo in "parametri_mancanti". L\'appuntamento è NON IN TARGET → imposta "fuori_parametro": true.\n\n'
+            '   b) PARAMETRI RICHIESTI MA FUORI SOGLIA: se il prospect ha dichiarato un valore che non rispetta\n'
+            '      la soglia richiesta, l\'appuntamento è NON IN TARGET → imposta "fuori_parametro": true.\n'
+            '      - ⚠️ TOLLERANZA 10% — si applica SOLO a parametri monetari (budget, spesa, fatturato, corrispettivo):\n'
+            '        Es. soglia minima 12.000€/anno → accettabile ≥ 10.800€/anno (≈ 900€/mese).\n'
+            '        Se il valore dichiarato è < 90% della soglia → fuori target.\n'
+            '      - ❌ La tolleranza NON si applica a parametri numerici non monetari\n'
+            '        (es. numero massimo dipendenti, peso massimo, dimensioni, ecc.) — la soglia è esatta.\n\n'
+            '   c) CALCOLO RATING — basato sulla percentuale di parametri correttamente qualificati:\n'
+            '      - 100% dei parametri richiesti e conformi → rating 5\n'
+            '      - 75-99% → rating 4\n'
+            '      - 50-74% → rating 3\n'
+            '      - 25-49% → rating 2\n'
+            '      - < 25% o "fuori_parametro": true → rating 1\n\n'
+            '   d) APPUNTAMENTO NON IN TARGET: imposta "fuori_parametro": true e assegna rating 1 quando:\n'
+            '      - Uno o più parametri NON sono stati richiesti dall\'operatore, OPPURE\n'
+            '      - Uno o più parametri sono stati richiesti ma il valore dichiarato è fuori soglia\n'
+            '        (tenendo conto della tolleranza 10% solo per i parametri monetari).\n'
+            '      Nella "spiegazione" indica esplicitamente: quale parametro è mancante o fuori soglia,\n'
+            '      il valore dichiarato vs la soglia richiesta, e la conclusione "Appuntamento NON IN TARGET."'
         )
     else:
         qual_instruction = (
-            '1. **PARAMETRI DI QUALIFICAZIONE** → Non sono stati definiti parametri di qualificazione '
-            'per questa campagna: la qualificazione non viene valutata.\n'
+            '1. **PARAMETRI DI QUALIFICAZIONE** → Non sono stati definiti parametri per questa campagna.\n'
             '   In "parametri_verificati": inserisci [] (array vuoto).\n'
             '   In "parametri_mancanti": inserisci [] (array vuoto).\n'
             '   In "spiegazione": scrivi "Parametri di qualificazione non definiti per questa campagna."\n'
@@ -333,7 +349,13 @@ Label corrispondenti ai rating (usa SEMPRE la label corretta nel campo "label"):
 - 4 → "BUONA"
 - 5 → "ECCELLENTE"
 
-⚠️ APPUNTAMENTO FUORI PARAMETRO: se "fuori_parametro" è true nella qualificazione, assegna SEMPRE rating 1 e spiega nella "spiegazione" quale soglia minima non è stata raggiunta (es. "Spesa dichiarata 5.000€/anno — sotto la soglia minima richiesta di 12.000€/anno. Appuntamento non valido.")"""
+⚠️ QUALIFICAZIONE — REGOLA CRITICA:
+Il rating della qualificazione NON segue la stessa scala delle fasi della telefonata.
+Per la qualificazione il rating dipende dalla % di parametri correttamente verificati (vedi istruzione 1 sopra).
+"fuori_parametro": true → rating SEMPRE 1, anche se la percentuale di parametri raccolti è alta.
+Esempio spiegazione per fuori_parametro=true: "Spesa dichiarata 5.000€/anno — sotto la soglia minima di 12.000€/anno (tolleranza 10%: min accettabile 10.800€). Appuntamento NON IN TARGET."
+
+Il rating delle FASI DELLA TELEFONATA segue invece la scala qualitativa 1-5 basata sull'esecuzione."""
 
 
 # ── Analysis call ──────────────────────────────────────────────────────────────
