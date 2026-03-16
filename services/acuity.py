@@ -112,13 +112,13 @@ def should_analyze(payload: dict) -> bool:
 
 _OPERATOR_EMAIL_RE = re.compile(r"op\.\d+\.[^@]+@effoncall\.com", re.IGNORECASE)
 # Matches op.XX.*@* (any domain — e.g. Gmail) for extracting the operator number
-_ANY_OP_EMAIL_RE  = re.compile(r"op\.(\d+)\.[^@]+@", re.IGNORECASE)
+_ANY_OP_EMAIL_RE  = re.compile(r"op\.(\d{2,})\.[^@]+@", re.IGNORECASE)
 
 # OPR. field: value like "91-STEFANO C." or "91 - STEFANO C." or "12-MARIO R."
 _OPR_VALUE_RE = re.compile(r"^(\d+)\s*-\s*(.+)$")
 
 # Form field names that contain the operator identifier (case-insensitive, accent-stripped)
-_OPR_FIELD_KEYWORDS_U = ("OPR", "OPERATRICE", "OPERATORE")
+_OPR_FIELD_KEYWORDS_U = ("OPR", "OPER", "OPERATRICE", "OPERATORE")
 
 
 def find_operator_email(appointment_data: dict) -> str:
