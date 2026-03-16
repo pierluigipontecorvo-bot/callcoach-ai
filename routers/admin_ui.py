@@ -743,9 +743,6 @@ async def appointments_data(
     else:
         analyses_map = {}
 
-    # Log keys from first appointment to identify createdAt field name
-    if all_appts:
-        logger.info("Acuity appt keys: %s", list(all_appts[0].keys()))
 
     enriched = []
     for a in all_appts:
@@ -786,13 +783,20 @@ async def appointments_data(
             is_past = False
             dt_display = dt_raw[:16].replace("T", " ")
 
-        # Acuity "createdAt" = when the appointment was booked
-        created_raw = a.get("createdAt", "")
-        try:
-            created_obj = parse_iso_datetime(created_raw)
-            created_display = created_obj.strftime("%d/%m/%Y %H:%M") if created_obj else (created_raw[:16].replace("T", " ") if created_raw else "—")
-        except Exception:
-            created_display = created_raw[:16].replace("T", " ") if created_raw else "—"
+        # Acuity "dateCreated" = when the appointment was booked (e.g. "June 17, 2013")
+        created_raw = a.get("dateCreated", "")
+        created_display = "—"
+        if created_raw:
+            from datetime import datetime as _dt
+            for _fmt in ("%B %d, %Y %I:%M%p", "%B %d, %Y %I:%M %p", "%B %d, %Y"):
+                try:
+                    created_display = _dt.strptime(created_raw.strip(), _fmt).strftime("%d/%m/%Y")
+                    break
+                except ValueError:
+                    pass
+            else:
+                # Fallback: show raw value truncated
+                created_display = created_raw[:10]
 
         enriched.append({
             "id": appt_id,
