@@ -743,6 +743,10 @@ async def appointments_data(
     else:
         analyses_map = {}
 
+    # Log keys from first appointment to identify createdAt field name
+    if all_appts:
+        logger.info("Acuity appt keys: %s", list(all_appts[0].keys()))
+
     enriched = []
     for a in all_appts:
         appt_id = str(a["id"])
