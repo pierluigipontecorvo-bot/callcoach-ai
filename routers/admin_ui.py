@@ -280,6 +280,65 @@ async def campaign_edit_submit(
     return RedirectResponse(url=f"/admin/ui/campaigns?ok={msg}", status_code=303)
 
 
+# ── Debug: raw DB + Acuity data (remove after diagnosis) ─────────────────────
+
+@router.get("/debug")
+async def debug_data(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Temporary diagnostic: returns JSON with exact DB campaign codes and raw Acuity types."""
+    if not _is_admin(request):
+        return JSONResponse({"error": "auth"}, status_code=401)
+
+    from datetime import datetime, timedelta, timezone
+    from fastapi.responses import JSONResponse as _JSON
+    from services.acuity import list_appointments, clear_appointments_cache
+
+    # DB campaigns
+    camp_result = await db.execute(select(Campaign))
+    camps = camp_result.scalars().all()
+    db_campaigns = [
+        {
+            "id": c.id,
+            "code": c.code,
+            "code_repr": repr(c.code),
+            "active": c.active,
+            "active_type": type(c.active).__name__,
+        }
+        for c in camps
+    ]
+
+    # Acuity appointments (last 7 days, first 20)
+    clear_appointments_cache()
+    now = datetime.now(timezone.utc)
+    min_date = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    max_date = (now + timedelta(days=30)).strftime("%Y-%m-%d")
+    try:
+        appts1 = await list_appointments(1, min_date=min_date, max_date=max_date, max_results=20)
+        appts2 = await list_appointments(2, min_date=min_date, max_date=max_date, max_results=20)
+        appts = appts1 + appts2
+    except Exception as exc:
+        appts = []
+
+    acuity_appointments = [
+        {
+            "id": a.get("id"),
+            "type": a.get("type"),
+            "type_repr": repr(a.get("type")),
+            "has_forms": bool(a.get("forms")),
+            "form_field_names": [
+                v.get("name")
+                for form in (a.get("forms") or [])
+                for v in (form.get("values") or form.get("fields") or [])
+            ],
+        }
+        for a in appts[:20]
+    ]
+
+    return _JSON({"db_campaigns": db_campaigns, "acuity_appointments": acuity_appointments})
+
+
 # ── Delete campaign ───────────────────────────────────────────────────────────
 
 @router.post("/campaigns/{campaign_id}/delete")
