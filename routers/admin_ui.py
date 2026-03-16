@@ -744,13 +744,6 @@ async def appointments_data(
         analyses_map = {}
 
 
-    # DEBUG — log keys + date fields from first appointment
-    if all_appts:
-        logger.info("ACUITY_DEBUG keys: %s", list(all_appts[0].keys()))
-        logger.info("ACUITY_DEBUG dateCreated=%r  createdAt=%r",
-                    all_appts[0].get("dateCreated"),
-                    all_appts[0].get("createdAt"))
-
     enriched = []
     for a in all_appts:
         appt_id = str(a["id"])
@@ -790,20 +783,35 @@ async def appointments_data(
             is_past = False
             dt_display = dt_raw[:16].replace("T", " ")
 
-        # Acuity "dateCreated" = when the appointment was booked (e.g. "June 17, 2013")
+        # Acuity "dateCreated" = when the appointment was booked
+        # Acuity returns Italian locale strings, e.g. "4 marzo 2020"
         created_raw = a.get("dateCreated", "")
         created_display = "—"
         if created_raw:
-            from datetime import datetime as _dt
-            for _fmt in ("%B %d, %Y %I:%M%p", "%B %d, %Y %I:%M %p", "%B %d, %Y"):
-                try:
-                    created_display = _dt.strptime(created_raw.strip(), _fmt).strftime("%d/%m/%Y")
-                    break
-                except ValueError:
-                    pass
+            _IT_MONTHS = {
+                "gennaio":1,"febbraio":2,"marzo":3,"aprile":4,"maggio":5,"giugno":6,
+                "luglio":7,"agosto":8,"settembre":9,"ottobre":10,"novembre":11,"dicembre":12,
+            }
+            import re as _re
+            _m = _re.match(r"(\d{1,2})\s+(\w+)\s+(\d{4})", created_raw.strip(), _re.IGNORECASE)
+            if _m:
+                _day, _mon, _yr = int(_m.group(1)), _m.group(2).lower(), int(_m.group(3))
+                if _mon in _IT_MONTHS:
+                    from datetime import date as _date
+                    created_display = _date(_yr, _IT_MONTHS[_mon], _day).strftime("%d/%m/%y")
+                else:
+                    created_display = created_raw[:10]
             else:
-                # Fallback: show raw value truncated
-                created_display = created_raw[:10]
+                # Fallback: try ISO or English formats
+                from datetime import datetime as _dt
+                for _fmt in ("%Y-%m-%d", "%B %d, %Y", "%d/%m/%Y"):
+                    try:
+                        created_display = _dt.strptime(created_raw.strip(), _fmt).strftime("%d/%m/%y")
+                        break
+                    except ValueError:
+                        pass
+                else:
+                    created_display = created_raw[:10]
 
         enriched.append({
             "id": appt_id,
