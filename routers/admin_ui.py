@@ -744,6 +744,13 @@ async def appointments_data(
         analyses_map = {}
 
 
+    # DEBUG — log keys + date fields from first appointment
+    if all_appts:
+        logger.info("ACUITY_DEBUG keys: %s", list(all_appts[0].keys()))
+        logger.info("ACUITY_DEBUG dateCreated=%r  createdAt=%r",
+                    all_appts[0].get("dateCreated"),
+                    all_appts[0].get("createdAt"))
+
     enriched = []
     for a in all_appts:
         appt_id = str(a["id"])
