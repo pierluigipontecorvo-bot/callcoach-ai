@@ -126,7 +126,8 @@
         </div>
       </div>
 
-      {# ── Parametri di qualificazione ── #}
+      {# ── Parametri di qualificazione — solo per campagne specifiche, mai globali ── #}
+      {% if not is_global %}
       <div class="mb-4">
         <div class="d-flex justify-content-between align-items-center mb-1">
           <label class="form-label fw-semibold mb-0">
@@ -151,14 +152,11 @@
         <textarea name="qualification_params" class="form-control textarea-doc doc-field" rows="8"
                   placeholder="Elenca i parametri da qualificare, uno per riga o in formato libero…">{{ campaign.qualification_params or (form_data.qualification_params if form_data else '') }}</textarea>
         <div class="form-text">
-          I parametri che l'operatore deve raccogliere dal cliente durante la chiamata.
-          {% if is_global %}
-            — <strong>Globale:</strong> usato come fallback se la campagna non ha parametri propri (non si sovrappone).
-          {% else %}
-            Se vuoto, l'AI usa i parametri globali come fallback.
-          {% endif %}
+          I parametri specifici che l'operatore deve raccogliere per questa campagna.
+          Se vuoto, l'AI non verifica parametri di qualificazione predefiniti.
         </div>
       </div>
+      {% endif %}
 
       {# ── Info cliente ── #}
       <div class="mb-0">

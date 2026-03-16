@@ -267,10 +267,8 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         global_doc.client_info if global_doc else None,
         campaign_db.client_info if campaign_db else None,
     )
-    merged_qual = (
-        (campaign_db.qualification_params if campaign_db else None)
-        or (global_doc.qualification_params if global_doc else None)
-    )
+    # Qualificazione: SOLO dalla campagna specifica — mai generica o globale
+    merged_qual = campaign_db.qualification_params if campaign_db else None
 
     # ── 5. Claude analysis ────────────────────────────────────────────────────
     await _update_progress(analysis_id, 65, "Analisi AI in corso...")
