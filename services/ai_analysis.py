@@ -76,9 +76,12 @@ def build_analysis_prompt(
     operator_email: Optional[str] = None,
     prompt_sections: Optional[dict] = None,
     prompt_extra: Optional[str] = None,
-    global_script: Optional[str] = None,
-    global_client_info: Optional[str] = None,
+    global_docs: Optional[list] = None,
 ) -> str:
+    """
+    global_docs: list of {"title": str, "content": str} — framework/technique docs
+                 loaded from the global_documents table (order respected).
+    """
 
     from services.prompt_db import _DEFAULT_SECTIONS
     secs = {**_DEFAULT_SECTIONS, **(prompt_sections or {})}
@@ -90,10 +93,12 @@ def build_analysis_prompt(
     docs_parts = []
 
     # Documenti globali: framework e tecniche di comunicazione sempre validi
-    if global_script:
-        docs_parts.append(f"### LINEE GUIDA E FRAMEWORK DI COMUNICAZIONE\n{global_script}")
-    if global_client_info:
-        docs_parts.append(f"### CONTESTO GENERALE\n{global_client_info}")
+    # Ognuno è una sezione separata con il proprio titolo
+    for gdoc in (global_docs or []):
+        t = (gdoc.get("title") or "").strip()
+        c = (gdoc.get("content") or "").strip()
+        if t and c:
+            docs_parts.append(f"### {t}\n{c}")
 
     # Documenti specifici della campagna
     if client_info:
@@ -327,12 +332,13 @@ async def analyze_call(
     operator_email: Optional[str] = None,
     prompt_sections: Optional[dict] = None,
     prompt_extra: Optional[str] = None,
-    global_script: Optional[str] = None,
-    global_client_info: Optional[str] = None,
+    global_docs: Optional[list] = None,
 ) -> dict:
     """
     Send the transcript to Claude and return the structured report dict.
     Raises on API errors or JSON parse failure.
+
+    global_docs: list of {"title": str, "content": str} from global_documents table.
     """
     prompt = build_analysis_prompt(
         transcript=transcript,
@@ -343,8 +349,7 @@ async def analyze_call(
         operator_email=operator_email,
         prompt_sections=prompt_sections,
         prompt_extra=prompt_extra,
-        global_script=global_script,
-        global_client_info=global_client_info,
+        global_docs=global_docs,
     )
 
     logger.info(

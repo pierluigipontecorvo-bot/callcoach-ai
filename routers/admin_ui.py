@@ -14,7 +14,12 @@ Routes:
   GET  /admin/ui/campaigns/{id}/edit        — edit form
   POST /admin/ui/campaigns/{id}/edit        — update campaign
   POST /admin/ui/campaigns/{id}/delete      — delete campaign
-  GET  /admin/ui/global                     — edit global documents (_GLOBAL_)
+  GET  /admin/ui/global                     — list global documents
+  GET  /admin/ui/global/new                 — new global document form
+  POST /admin/ui/global/new                 — create global document
+  GET  /admin/ui/global/{id}/edit           — edit global document
+  POST /admin/ui/global/{id}/edit           — update global document
+  POST /admin/ui/global/{id}/delete         — delete global document
   POST /admin/ui/upload-extract             — extract text from uploaded file
   GET  /admin/ui/analyses                   — list analyses (last 100)
   GET  /admin/ui/analyses/{id}              — analysis detail
@@ -35,8 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
-from models import Analysis, Campaign, PromptSection
-from services.campaign_db import GLOBAL_CODE
+from models import Analysis, Campaign, GlobalDocument, PromptSection
 from utils.auth import create_access_token, verify_admin_password
 
 router = APIRouter(prefix="/admin/ui", tags=["admin-ui"])
@@ -701,7 +705,7 @@ async def appointments_data(
 
     # Load ALL campaigns (active + inactive) — one query
     camp_result = await db.execute(
-        select(Campaign).where(Campaign.code != GLOBAL_CODE)
+        select(Campaign).where(Campaign.code != "_GLOBAL_")
     )
     _all_camps = list(camp_result.scalars().all())
     # Normalise keys: strip + uppercase so DB entries with accidental whitespace
@@ -838,70 +842,159 @@ async def trigger_appointment_analysis(
 # ── Global documents (/admin/ui/global) ──────────────────────────────────────
 
 @router.get("/global", response_class=HTMLResponse)
-async def global_docs_form(
+async def global_docs_list(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     if not _is_admin(request):
         return _login_redirect()
 
-    result = await db.execute(select(Campaign).where(Campaign.code == GLOBAL_CODE))
-    campaign = result.scalar_one_or_none()
+    result = await db.execute(
+        select(GlobalDocument).order_by(GlobalDocument.sort_order, GlobalDocument.id)
+    )
+    docs = result.scalars().all()
 
     flash_ok  = request.query_params.get("ok", "")
     flash_err = request.query_params.get("err", "")
 
     return templates.TemplateResponse(
-        "campaigns_form.html",
+        "global_docs_list.html",
         {
             "request": request,
-            "campaign": campaign,
+            "docs": docs,
             "active_page": "global",
-            "is_global": True,
             "flash_ok": flash_ok,
             "flash_err": flash_err,
-            "form_data": None,
         },
     )
 
 
-@router.post("/global")
-async def global_docs_submit(
+@router.get("/global/new", response_class=HTMLResponse)
+async def global_doc_new_form(request: Request):
+    if not _is_admin(request):
+        return _login_redirect()
+    return templates.TemplateResponse(
+        "global_docs_form.html",
+        {
+            "request": request,
+            "doc": None,
+            "active_page": "global",
+            "action": "/admin/ui/global/new",
+            "flash_ok": "",
+            "flash_err": "",
+        },
+    )
+
+
+@router.post("/global/new")
+async def global_doc_new_submit(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    script: str = Form(""),
-    qualification_params: str = Form(""),
-    client_info: str = Form(""),
-    notes: str = Form(""),
-    active: str = Form("off"),
+    title: str = Form(""),
+    content: str = Form(""),
+    sort_order: int = Form(0),
+    is_active: str = Form("off"),
 ):
     if not _is_admin(request):
         return _login_redirect()
 
-    result = await db.execute(select(Campaign).where(Campaign.code == GLOBAL_CODE))
-    campaign = result.scalar_one_or_none()
-
-    if not campaign:
-        # First save — create the row
-        campaign = Campaign(
-            code=GLOBAL_CODE,
-            type="GLOBAL",
-            nome="Documenti Globali — tutte le campagne",
-            active=(active == "on"),
+    title = title.strip()
+    if not title:
+        return templates.TemplateResponse(
+            "global_docs_form.html",
+            {
+                "request": request,
+                "doc": None,
+                "active_page": "global",
+                "action": "/admin/ui/global/new",
+                "flash_ok": "",
+                "flash_err": "Il titolo è obbligatorio.",
+            },
+            status_code=422,
         )
-        db.add(campaign)
 
-    campaign.script = script.strip() or None
-    campaign.qualification_params = qualification_params.strip() or None
-    campaign.client_info = client_info.strip() or None
-    campaign.notes = notes.strip() or None
-    campaign.active = (active == "on")
-
+    doc = GlobalDocument(
+        title=title,
+        content=content.strip(),
+        sort_order=sort_order,
+        is_active=(is_active == "on"),
+    )
+    db.add(doc)
     await db.commit()
 
     from urllib.parse import quote
-    msg = quote("Documenti globali salvati.")
-    return RedirectResponse(url=f"/admin/ui/global?ok={msg}", status_code=303)
+    return RedirectResponse(url=f"/admin/ui/global?ok={quote('Documento creato.')}", status_code=303)
+
+
+@router.get("/global/{doc_id}/edit", response_class=HTMLResponse)
+async def global_doc_edit_form(
+    request: Request,
+    doc_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    result = await db.execute(select(GlobalDocument).where(GlobalDocument.id == doc_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        return RedirectResponse(url="/admin/ui/global", status_code=302)
+
+    return templates.TemplateResponse(
+        "global_docs_form.html",
+        {
+            "request": request,
+            "doc": doc,
+            "active_page": "global",
+            "action": f"/admin/ui/global/{doc_id}/edit",
+            "flash_ok": "",
+            "flash_err": "",
+        },
+    )
+
+
+@router.post("/global/{doc_id}/edit")
+async def global_doc_edit_submit(
+    request: Request,
+    doc_id: int,
+    db: AsyncSession = Depends(get_db),
+    title: str = Form(""),
+    content: str = Form(""),
+    sort_order: int = Form(0),
+    is_active: str = Form("off"),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    result = await db.execute(select(GlobalDocument).where(GlobalDocument.id == doc_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        return RedirectResponse(url="/admin/ui/global", status_code=302)
+
+    doc.title = title.strip() or doc.title
+    doc.content = content.strip()
+    doc.sort_order = sort_order
+    doc.is_active = (is_active == "on")
+    await db.commit()
+
+    from urllib.parse import quote
+    return RedirectResponse(url=f"/admin/ui/global?ok={quote('Documento aggiornato.')}", status_code=303)
+
+
+@router.post("/global/{doc_id}/delete")
+async def global_doc_delete(
+    request: Request,
+    doc_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    await db.execute(sa_delete(GlobalDocument).where(GlobalDocument.id == doc_id))
+    await db.commit()
+
+    from urllib.parse import quote
+    return RedirectResponse(url=f"/admin/ui/global?ok={quote('Documento eliminato.')}", status_code=303)
 
 
 # ── File text extraction (/admin/ui/upload-extract) ───────────────────────────

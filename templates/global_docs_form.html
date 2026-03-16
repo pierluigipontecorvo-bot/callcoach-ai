@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{% if doc %}Modifica{% else %}Nuovo{% endif %} Documento Globale — CallCoach{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-4">
+  <a href="/admin/ui/global" style="color:#708090; text-decoration:none; font-size:13px;">◈ Documenti Globali</a>
+  <span style="color:#b0b8c8;">›</span>
+  <span style="font-size:13px; color:#405080;">{% if doc %}Modifica «{{ doc.title }}»{% else %}Nuovo documento{% endif %}</span>
+</div>
+
+<div class="card" style="max-width:860px;">
+  <div class="card-header">
+    {% if doc %}Modifica documento{% else %}Nuovo documento globale{% endif %}
+  </div>
+  <div class="card-body p-4">
+    <form method="post" action="{{ action }}">
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Titolo <span class="text-danger">*</span></label>
+        <input type="text" name="title" class="form-control"
+               value="{{ doc.title if doc else '' }}"
+               placeholder="es. Framework Superamento Obiezioni, Tecniche di Apertura, …"
+               required>
+        <div class="form-text">
+          Il titolo diventa il nome della sezione nel prompt AI
+          (es. <code>### Framework Superamento Obiezioni</code>).
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Contenuto</label>
+        <textarea name="content" class="form-control doc-field" rows="18"
+                  placeholder="Inserisci il framework, le tecniche, le linee guida…">{{ doc.content if doc else '' }}</textarea>
+        <div class="form-text">
+          Testo libero — può usare markdown. Viene passato direttamente a Claude come
+          sezione di riferimento per la valutazione.
+        </div>
+      </div>
+
+      <div class="row mb-3">
+        <div class="col-sm-3">
+          <label class="form-label fw-semibold">Ordine</label>
+          <input type="number" name="sort_order" class="form-control"
+                 value="{{ doc.sort_order if doc else 0 }}" min="0">
+          <div class="form-text">I numeri più bassi vengono prima.</div>
+        </div>
+        <div class="col-sm-4 d-flex align-items-end pb-1">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="is_active" id="is_active"
+                   {% if (doc is none) or doc.is_active %}checked{% endif %}>
+            <label class="form-check-label fw-semibold" for="is_active" style="font-size:13px;">
+              Attivo
+            </label>
+            <div class="form-text">Solo i documenti attivi vengono inclusi nel prompt.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 pt-2">
+        <button type="submit" class="btn btn-dark px-4">
+          {% if doc %}Salva modifiche{% else %}Crea documento{% endif %}
+        </button>
+        <a href="/admin/ui/global" class="btn btn-outline-secondary px-3">Annulla</a>
+      </div>
+
+    </form>
+  </div>
+</div>
+{% endblock %}

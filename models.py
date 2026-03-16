@@ -7,6 +7,18 @@ from sqlalchemy.dialects.postgresql import JSONB
 from database import Base
 
 
+class GlobalDocument(Base):
+    __tablename__ = "global_documents"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    content = Column(Text, nullable=False, server_default="")
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class PromptSection(Base):
     __tablename__ = "prompt_sections"
     id = Column(Integer, primary_key=True)

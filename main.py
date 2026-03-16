@@ -93,6 +93,26 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("campaigns.prompt_extra migration failed (non-fatal): %s", exc)
 
+    # ── Create global_documents table if not present ──────────────────────────
+    try:
+        from sqlalchemy import text
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS global_documents (
+                    id SERIAL PRIMARY KEY,
+                    title VARCHAR(200) NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active BOOLEAN NOT NULL DEFAULT true,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await session.commit()
+    except Exception as exc:
+        logger.warning("global_documents table migration failed (non-fatal): %s", exc)
+
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ from services.acuity import (
     should_analyze,
 )
 from services.ai_analysis import _extract_operator_name, analyze_call
-from services.campaign_db import get_campaign_by_code, get_global_campaign
+from services.campaign_db import get_campaign_by_code
 from services.campaign_parser import parse_campaign_code
 from services.email_service import generate_html_report, send_analysis_report
 from services.sidial import find_and_download_all_recordings
@@ -248,20 +248,34 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 4. Load campaign config + global documents ────────────────────────────
     await _update_progress(analysis_id, 60, "Caricamento configurazione campagna...")
     campaign_db = None
-    global_doc = None
     try:
         campaign_db = await get_campaign_by_code(campaign_info["raw"])
-        global_doc  = await get_global_campaign()
     except Exception as exc:
         logger.warning("[%s] Could not fetch campaign config: %s", appointment_id, exc)
 
-    # Globali e campagna separati — l'AI li vede come sezioni distinte nel prompt
-    global_script      = global_doc.script       if global_doc  else None
-    global_client_info = global_doc.client_info  if global_doc  else None
-    campaign_script    = campaign_db.script      if campaign_db else None
-    campaign_client    = campaign_db.client_info if campaign_db else None
+    campaign_script = campaign_db.script             if campaign_db else None
+    campaign_client = campaign_db.client_info        if campaign_db else None
     # Qualificazione: SOLO dalla campagna specifica — mai generica o globale
-    campaign_qual      = campaign_db.qualification_params if campaign_db else None
+    campaign_qual   = campaign_db.qualification_params if campaign_db else None
+
+    # Documenti globali dalla nuova tabella global_documents
+    global_docs = []
+    try:
+        from sqlalchemy import select as sa_select
+        from models import GlobalDocument
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as _sess:
+            _res = await _sess.execute(
+                sa_select(GlobalDocument)
+                .where(GlobalDocument.is_active == True)
+                .order_by(GlobalDocument.sort_order, GlobalDocument.id)
+            )
+            global_docs = [
+                {"title": d.title, "content": d.content}
+                for d in _res.scalars().all()
+            ]
+    except Exception as exc:
+        logger.warning("[%s] Could not load global_documents: %s", appointment_id, exc)
 
     # ── 5. Claude analysis ────────────────────────────────────────────────────
     await _update_progress(analysis_id, 65, "Analisi AI in corso...")
@@ -283,8 +297,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             operator_email=operator_email,
             prompt_sections=prompt_sections,
             prompt_extra=campaign_db.prompt_extra if campaign_db else None,
-            global_script=global_script,
-            global_client_info=global_client_info,
+            global_docs=global_docs,
         )
     except Exception as exc:
         msg = f"Claude analysis failed: {exc}"
