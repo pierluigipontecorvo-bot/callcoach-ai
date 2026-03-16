@@ -28,23 +28,34 @@
       </div>
 
       <div class="mb-3">
-        <label class="form-label fw-semibold">Contenuto</label>
-        <textarea name="content" class="form-control doc-field" rows="18"
-                  placeholder="Inserisci il framework, le tecniche, le linee guida…">{{ doc.content if doc else '' }}</textarea>
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label fw-semibold mb-0">Contenuto</label>
+          <div class="d-flex align-items-center gap-2">
+            <button type="button" class="btn btn-outline-secondary upload-btn"
+                    data-target="content"
+                    onclick="document.getElementById('file_content').click()">
+              📎 Carica da file
+            </button>
+            <input type="file" id="file_content" class="d-none"
+                   accept=".pdf,.doc,.docx,.txt"
+                   onchange="uploadToField(this, 'content')">
+          </div>
+        </div>
+        <textarea name="content" class="form-control doc-field" rows="20"
+                  placeholder="Inserisci il framework, le tecniche, le linee guida…&#10;&#10;Puoi anche caricare un file PDF, Word o TXT con il pulsante qui sopra.">{{ doc.content if doc else '' }}</textarea>
         <div class="form-text">
-          Testo libero — può usare markdown. Viene passato direttamente a Claude come
-          sezione di riferimento per la valutazione.
+          Testo libero — può usare markdown. Viene passato direttamente a Claude come sezione di riferimento per la valutazione.
         </div>
       </div>
 
-      <div class="row mb-3">
+      <div class="row mb-4">
         <div class="col-sm-3">
           <label class="form-label fw-semibold">Ordine</label>
           <input type="number" name="sort_order" class="form-control"
                  value="{{ doc.sort_order if doc else 0 }}" min="0">
-          <div class="form-text">I numeri più bassi vengono prima.</div>
+          <div class="form-text">I numeri più bassi vengono prima nel prompt.</div>
         </div>
-        <div class="col-sm-4 d-flex align-items-end pb-1">
+        <div class="col-sm-5 d-flex align-items-end pb-1">
           <div class="form-check">
             <input class="form-check-input" type="checkbox" name="is_active" id="is_active"
                    {% if (doc is none) or doc.is_active %}checked{% endif %}>
@@ -56,7 +67,7 @@
         </div>
       </div>
 
-      <div class="d-flex gap-2 pt-2">
+      <div class="d-flex gap-2 pt-1">
         <button type="submit" class="btn btn-dark px-4">
           {% if doc %}Salva modifiche{% else %}Crea documento{% endif %}
         </button>
@@ -66,4 +77,62 @@
     </form>
   </div>
 </div>
+
+{# ── Upload toast ── #}
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index:1100;">
+  <div id="uploadToast" class="toast align-items-center border-0" role="alert">
+    <div class="d-flex">
+      <div class="toast-body fw-semibold" id="uploadToastMsg" style="font-size:13px;"></div>
+      <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .upload-btn { font-size: 11px; padding: 3px 10px; line-height: 1.6; white-space: nowrap; }
+</style>
+<script>
+async function uploadToField(inputEl, fieldName) {
+  const file = inputEl.files[0];
+  if (!file) return;
+
+  const btn = document.querySelector(`.upload-btn[data-target="${fieldName}"]`);
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '⏳ Estrazione…';
+  btn.disabled = true;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch('/admin/ui/upload-extract', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (data.error) {
+      showToast('❌ ' + data.error, 'danger');
+      btn.innerHTML = originalHtml;
+    } else {
+      document.querySelector(`textarea[name="${fieldName}"]`).value = data.text;
+      const chars = data.chars.toLocaleString('it-IT');
+      btn.innerHTML = '✓ ' + data.filename.replace(/^(.{22}).*(\..{1,4})$/, '$1…$2');
+      showToast('✅ Caricato: ' + data.filename + ' (' + chars + ' car.)', 'success');
+    }
+  } catch (_) {
+    showToast('❌ Errore di rete. Riprova.', 'danger');
+    btn.innerHTML = originalHtml;
+  } finally {
+    btn.disabled = false;
+    inputEl.value = '';
+  }
+}
+
+function showToast(msg, type) {
+  const el = document.getElementById('uploadToast');
+  document.getElementById('uploadToastMsg').textContent = msg;
+  el.className = 'toast align-items-center border-0 text-bg-' + type;
+  bootstrap.Toast.getOrCreateInstance(el, { delay: 4500 }).show();
+}
+</script>
 {% endblock %}
