@@ -120,12 +120,11 @@ def build_analysis_prompt(
     else:
         qual_instruction = (
             '1. **PARAMETRI DI QUALIFICAZIONE** → Non sono stati definiti parametri di qualificazione '
-            'per questa campagna.\n'
-            '   In "parametri_verificati": elenca SOLO le informazioni effettivamente chieste o '
-            'raccolte dall\'operatore durante la chiamata (es. disponibilità appuntamento, ruolo '
-            'prospect, interesse dichiarato, ecc.).\n'
-            '   In "parametri_mancanti": inserisci [] (array vuoto). '
-            'NON inventare parametri che avrebbe dovuto raccogliere.'
+            'per questa campagna: la qualificazione non viene valutata.\n'
+            '   In "parametri_verificati": inserisci [] (array vuoto).\n'
+            '   In "parametri_mancanti": inserisci [] (array vuoto).\n'
+            '   In "sintesi": scrivi "Parametri di qualificazione non definiti per questa campagna."\n'
+            '   Assegna "rating": 2 (neutro). NON inventare parametri.'
         )
 
     # Build optional extra sections
