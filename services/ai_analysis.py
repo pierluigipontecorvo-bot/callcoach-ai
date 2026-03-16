@@ -45,6 +45,7 @@ def _extract_operator_name(operator_email: Optional[str] = None) -> str:
 # ── Field ordering & default disclaimer ────────────────────────────────────────
 
 _REPORT_FIELD_ORDER = [
+    "errore_tecnico",
     "ragione_sociale",
     "data_appuntamento",
     "ora_appuntamento",
@@ -230,6 +231,11 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
 
 ⚠️ REGOLE CRITICHE — RISPETTALE TUTTE SENZA NESSUNA ECCEZIONE:
 
+0. PRIMA DI TUTTO — valuta la qualità della trascrizione:
+   - Se la trascrizione è incomprensibile, illeggibile, piena di caratteri strani, o ha meno di 10 parole di senso compiuto in italiano → imposta "errore_tecnico": true
+   - Se la trascrizione è leggibile (anche parzialmente) → imposta "errore_tecnico": false
+   - Se "errore_tecnico" è true: puoi compilare i campi rimanenti con valori di default neutri — il report NON verrà inviato all'operatore.
+
 1. Rispondi ESCLUSIVAMENTE in JSON valido. Zero testo prima o dopo il JSON.
 2. I campi devono rispettare ESATTAMENTE l'ordine mostrato nello schema qui sotto. Non modificare, aggiungere o riordinare nessun campo.
 3. "punti_di_forza" deve contenere ESATTAMENTE 3 oggetti — né uno di più, né uno di meno.
@@ -238,6 +244,8 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
 6. Il campo "disclaimer" è obbligatorio, deve essere l'ULTIMO campo del JSON e deve contenere ESATTAMENTE il testo fornito nello schema sottostante, senza modifiche.
 
 {{
+  "errore_tecnico": false,
+
   "ragione_sociale": "Ragione sociale del prospect (estraila dalla trascrizione)",
   "data_appuntamento": "YYYY-MM-DD o null se non trovata nella trascrizione",
   "ora_appuntamento": "HH:MM o null se non trovata",
@@ -420,6 +428,7 @@ async def analyze_call(
         raise ValueError(f"Claude returned invalid JSON: {exc}") from exc
 
     # Ensure required top-level keys with safe fallbacks
+    report.setdefault("errore_tecnico", False)
     report.setdefault("ragione_sociale", "N/A")
     report.setdefault("data_appuntamento", None)
     report.setdefault("ora_appuntamento", None)

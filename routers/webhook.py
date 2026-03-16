@@ -245,6 +245,35 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     transcript = "\n\n".join(transcript_parts)
     logger.info("[%s] Trascrizione totale: %d caratteri", appointment_id, len(transcript))
 
+    # ── Pre-flight: trascrizione completamente non disponibile ────────────────
+    _all_unavailable = all("[trascrizione non disponibile]" in p for p in transcript_parts)
+    _too_short = len(transcript.replace("\n", "").strip()) < 80
+    if _all_unavailable or _too_short:
+        logger.warning("[%s] Trascrizione illeggibile o assente — errore tecnico automatico", appointment_id)
+        from database import AsyncSessionLocal
+        from models import Analysis
+        from sqlalchemy.orm.attributes import flag_modified as _flag_mod
+        async with AsyncSessionLocal() as _sess:
+            _obj = await _sess.get(Analysis, analysis_id)
+            if _obj:
+                _obj.processing_status = "completed"
+                _obj.progress = 100
+                _obj.step_message = "Completata (errore tecnico)"
+                _obj.qualification_level = "errore_tecnico"
+                _obj.transcript = transcript
+                _obj.report_json = {
+                    "errore_tecnico": True,
+                    "qualificazione": {
+                        "rating": 1, "label": "INSUFFICIENTE",
+                        "fuori_parametro": False,
+                        "spiegazione": "Analisi non valida — errore tecnico di trascrizione. La registrazione non è stata trascritta correttamente.",
+                        "parametri_verificati": [], "parametri_mancanti": [],
+                    },
+                }
+                _flag_mod(_obj, "report_json")
+                await _sess.commit()
+        return
+
     # ── 4. Load campaign config + global documents ────────────────────────────
     await _update_progress(analysis_id, 60, "Caricamento configurazione campagna...")
     campaign_db = None
@@ -305,7 +334,28 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
-    # ── 6. HTML report ────────────────────────────────────────────────────────
+    # ── 6. Controllo errore tecnico rilevato da Claude ────────────────────────
+    if report.get("errore_tecnico"):
+        logger.warning("[%s] Claude ha rilevato trascrizione illeggibile — errore tecnico automatico", appointment_id)
+        await _save_analysis(
+            analysis_id=analysis_id,
+            appointment_id=appointment_id,
+            campaign_code=campaign_info["raw"],
+            transcript=transcript,
+            report=report,
+            html_report=None,
+            acuity_account=acuity_account,
+            appointment_dt=appointment_dt,
+            phone=phone,
+            client_company=client_company,
+            sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
+            operator_name=operator_display,
+            qualification_level="errore_tecnico",
+            email_sent=False,
+        )
+        return
+
+    # ── 7. HTML report ────────────────────────────────────────────────────────
     await _update_progress(analysis_id, 85, "Generazione report HTML...")
     appointment_info = {
         "datetime": appointment_data.get("datetime", ""),
@@ -314,7 +364,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     }
     html_report = generate_html_report(report, appointment_info, campaign_info, operator_name=operator_display, client_company=client_company)
 
-    # ── 7. Email ──────────────────────────────────────────────────────────────
+    # ── 8. Email ──────────────────────────────────────────────────────────────
     from config import settings as cfg
 
     _rating_to_level = {1: "inaccurata", 2: "da_migliorare", 3: "buona"}
@@ -340,7 +390,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # except Exception as exc:
     #     logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
 
-    # ── 8. Save to DB ─────────────────────────────────────────────────────────
+    # ── 9. Save to DB ─────────────────────────────────────────────────────────
     await _update_progress(analysis_id, 95, "Salvataggio...")
     try:
         operator_name_db = operator_display
