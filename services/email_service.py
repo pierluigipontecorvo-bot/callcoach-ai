@@ -145,6 +145,7 @@ def generate_html_report(
     operator_name: str = "",
     client_company: str = "",
     model_name: str = "claude-haiku-4-5-20251001",
+    n_recordings: int = 0,
 ) -> str:
     """Render the analysis report as a self-contained HTML email."""
 
@@ -174,7 +175,8 @@ def generate_html_report(
     else:
         appt_display = appointment_info.get("datetime", "N/A")
 
-    report_date = datetime.utcnow().strftime("%d/%m/%Y")
+    report_date  = datetime.utcnow().strftime("%d/%m/%Y")
+    rec_label    = f"{n_recordings}" if n_recordings > 0 else "—"
 
     # ── Qualificazione section ────────────────────────────────────────────────
     params_ok_html = "".join(
@@ -289,7 +291,9 @@ def generate_html_report(
     </tr>
     <tr>
       <td style="padding:5px 10px;color:#708090;font-size:12px">Data appuntamento</td>
-      <td colspan="3" style="padding:5px 10px;font-size:13px;font-weight:600;color:#001126">{appt_display}</td>
+      <td style="padding:5px 10px;font-size:13px;font-weight:600;color:#001126">{appt_display}</td>
+      <td style="padding:5px 10px;color:#708090;font-size:12px">N. registrazioni</td>
+      <td style="padding:5px 10px;font-size:13px;font-weight:600;color:#001126">{rec_label}</td>
     </tr>
   </table>
 </div>
