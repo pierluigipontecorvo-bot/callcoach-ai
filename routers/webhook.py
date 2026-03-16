@@ -255,20 +255,13 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     except Exception as exc:
         logger.warning("[%s] Could not fetch campaign config: %s", appointment_id, exc)
 
-    def _merge_text(global_val: str | None, campaign_val: str | None) -> str | None:
-        parts = [p.strip() for p in [global_val, campaign_val] if p and p.strip()]
-        return "\n\n---\n\n".join(parts) if parts else None
-
-    merged_script = _merge_text(
-        global_doc.script if global_doc else None,
-        campaign_db.script if campaign_db else None,
-    )
-    merged_client_info = _merge_text(
-        global_doc.client_info if global_doc else None,
-        campaign_db.client_info if campaign_db else None,
-    )
+    # Globali e campagna separati — l'AI li vede come sezioni distinte nel prompt
+    global_script      = global_doc.script       if global_doc  else None
+    global_client_info = global_doc.client_info  if global_doc  else None
+    campaign_script    = campaign_db.script      if campaign_db else None
+    campaign_client    = campaign_db.client_info if campaign_db else None
     # Qualificazione: SOLO dalla campagna specifica — mai generica o globale
-    merged_qual = campaign_db.qualification_params if campaign_db else None
+    campaign_qual      = campaign_db.qualification_params if campaign_db else None
 
     # ── 5. Claude analysis ────────────────────────────────────────────────────
     await _update_progress(analysis_id, 65, "Analisi AI in corso...")
@@ -284,12 +277,14 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         report = await analyze_call(
             transcript=transcript,
             campaign_info=campaign_info,
-            script=merged_script,
-            qualification_params=merged_qual,
-            client_info=merged_client_info,
+            script=campaign_script,
+            qualification_params=campaign_qual,
+            client_info=campaign_client,
             operator_email=operator_email,
             prompt_sections=prompt_sections,
             prompt_extra=campaign_db.prompt_extra if campaign_db else None,
+            global_script=global_script,
+            global_client_info=global_client_info,
         )
     except Exception as exc:
         msg = f"Claude analysis failed: {exc}"

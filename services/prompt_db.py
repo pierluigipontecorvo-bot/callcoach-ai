@@ -52,9 +52,10 @@ _DEFAULT_SECTIONS: dict[str, str] = {
         "Il tono del report deve essere professionale, semplice da comprendere ma non banale. Particolare attenzione a usare frasi che siano sempre d'aiuto e non possano mai essere interpretate come giudizi inappellabili o offensivi. Ad esempio, invece di \"il tono usato era confuso e le parole si capivano poco\", si può dire \"il tono può migliorare in termini di chiarezza rallentando il ritmo, gestendo bene le pause e dandosi del tempo per pronunciare la frase senza imperfezioni\"."
     ),
     "istruzioni_tecniche": (
-        "2. **SCRIPT DI RIFERIMENTO** → Sezione \"### SCRIPT DI RIFERIMENTO\" nei documenti sopra. Se non presente, valuta la struttura della chiamata rispetto alle best practice di telemarketing B2B outbound italiano (apertura diretta e professionale senza scuse, value proposition chiara, qualificazione metodica, chiusura sull'appuntamento).\n\n"
-        "3. **INFORMAZIONI SUL CLIENTE** → Sezione \"### INFORMAZIONI SUL CLIENTE E SUL SERVIZIO\" nei documenti sopra. Se non presente, utilizza le informazioni deducibili dal codice campagna e dalla trascrizione stessa.\n\n"
-        "4. **TRASCRIZIONE** → Cita sempre frasi ESATTE dalla trascrizione per i punti di forza, le aree di miglioramento e gli esempi pratici. Non parafrasare: usa le parole esatte dell'operatore tra virgolette."
+        "2. **FRAMEWORK E TECNICHE DI COMUNICAZIONE** → Sezione \"### LINEE GUIDA E FRAMEWORK DI COMUNICAZIONE\" nei documenti sopra. Questi principi sono sempre validi indipendentemente dalla campagna: usali come metro di valutazione per ogni fase della telefonata e per i suggerimenti di miglioramento.\n\n"
+        "3. **SCRIPT DI CAMPAGNA** → Sezione \"### SCRIPT DI CAMPAGNA\" nei documenti sopra. Confronta la telefonata con lo script specifico di questa campagna. Se non presente, valuta rispetto alle best practice di telemarketing B2B outbound italiano (apertura diretta e professionale senza scuse, value proposition chiara, qualificazione metodica, chiusura sull'appuntamento).\n\n"
+        "4. **INFORMAZIONI SUL CLIENTE** → Sezione \"### INFORMAZIONI SUL CLIENTE E SUL SERVIZIO\" nei documenti sopra. Se non presente, utilizza le informazioni deducibili dal codice campagna e dalla trascrizione stessa.\n\n"
+        "5. **TRASCRIZIONE** → Cita sempre frasi ESATTE dalla trascrizione per i punti di forza, le aree di miglioramento e gli esempi pratici. Non parafrasare: usa le parole esatte dell'operatore tra virgolette."
     ),
     "altre_istruzioni": "",
 }

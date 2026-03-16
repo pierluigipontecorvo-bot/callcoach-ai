@@ -76,6 +76,8 @@ def build_analysis_prompt(
     operator_email: Optional[str] = None,
     prompt_sections: Optional[dict] = None,
     prompt_extra: Optional[str] = None,
+    global_script: Optional[str] = None,
+    global_client_info: Optional[str] = None,
 ) -> str:
 
     from services.prompt_db import _DEFAULT_SECTIONS
@@ -87,11 +89,17 @@ def build_analysis_prompt(
     # ── Build documents section ───────────────────────────────────────────────
     docs_parts = []
 
-    # Documenti specifici della campagna (già merged con _GLOBAL_ in webhook.py)
+    # Documenti globali: framework e tecniche di comunicazione sempre validi
+    if global_script:
+        docs_parts.append(f"### LINEE GUIDA E FRAMEWORK DI COMUNICAZIONE\n{global_script}")
+    if global_client_info:
+        docs_parts.append(f"### CONTESTO GENERALE\n{global_client_info}")
+
+    # Documenti specifici della campagna
     if client_info:
         docs_parts.append(f"### INFORMAZIONI SUL CLIENTE E SUL SERVIZIO\n{client_info}")
     if script:
-        docs_parts.append(f"### SCRIPT DI RIFERIMENTO\n{script}")
+        docs_parts.append(f"### SCRIPT DI CAMPAGNA\n{script}")
     if qualification_params:
         docs_parts.append(f"### PARAMETRI DI QUALIFICAZIONE\n{qualification_params}")
 
@@ -319,6 +327,8 @@ async def analyze_call(
     operator_email: Optional[str] = None,
     prompt_sections: Optional[dict] = None,
     prompt_extra: Optional[str] = None,
+    global_script: Optional[str] = None,
+    global_client_info: Optional[str] = None,
 ) -> dict:
     """
     Send the transcript to Claude and return the structured report dict.
@@ -333,6 +343,8 @@ async def analyze_call(
         operator_email=operator_email,
         prompt_sections=prompt_sections,
         prompt_extra=prompt_extra,
+        global_script=global_script,
+        global_client_info=global_client_info,
     )
 
     logger.info(
