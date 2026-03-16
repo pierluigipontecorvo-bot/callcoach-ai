@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Editor Prompt AI — CallCoach Admin{% endblock %}
+
+{% block content %}
+
+{# ── Header ── #}
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <div>
+    <h4 class="fw-bold mb-0">Editor Prompt AI</h4>
+    <p class="text-muted small mb-0">
+      Modifica le sezioni del prompt globale usato dall'AI per analizzare le telefonate.
+      Le modifiche si applicano a <strong>tutte</strong> le campagne (salvo override specifico di campagna).
+    </p>
+  </div>
+</div>
+
+<div class="alert alert-secondary" style="border-radius:8px; font-size:12.5px; background:#f4f5f7; border-color:#dde1e9; color:#506080;">
+  <strong>Nota:</strong> Le sezioni <code>INFORMAZIONI DI CAMPAGNA</code>, <code>DOCUMENTI DI RIFERIMENTO</code>,
+  <code>TRASCRIZIONE</code> e <code>FORMATO RISPOSTA</code> sono generate automaticamente e non sono editabili qui.
+  Il punto 1 delle <em>Istruzioni tecniche</em> (parametri di qualificazione) è anch'esso generato automaticamente
+  in base alla configurazione della campagna.
+</div>
+
+<form method="post" action="/admin/ui/prompt" id="promptForm">
+
+  <div class="accordion mb-4" id="promptAccordion">
+    {% for section in sections %}
+    <div class="accordion-item" style="border:1px solid #e2e4e9; border-radius:8px; margin-bottom:8px; overflow:hidden;">
+      <h2 class="accordion-header" id="heading-{{ section.key }}">
+        <button class="accordion-button {% if not loop.first %}collapsed{% endif %}"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#collapse-{{ section.key }}"
+                aria-expanded="{{ 'true' if loop.first else 'false' }}"
+                aria-controls="collapse-{{ section.key }}"
+                style="font-family:'Space Grotesk',sans-serif; font-size:14px; font-weight:600; color:var(--ec-navy); background:#f8f9fc;">
+          {{ section.title }}
+          <span class="ms-2 text-muted fw-normal" style="font-size:12px; font-family:'Poppins',sans-serif;">
+            — {{ section.description }}
+          </span>
+        </button>
+      </h2>
+      <div id="collapse-{{ section.key }}"
+           class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
+           aria-labelledby="heading-{{ section.key }}"
+           data-bs-parent="#promptAccordion">
+        <div class="accordion-body" style="background:#fff;">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="form-text mb-0">
+              <span id="charcount-{{ section.key }}" class="fw-semibold">{{ section.content | length }}</span> caratteri
+            </span>
+            <button type="button"
+                    class="btn btn-outline-secondary btn-sm"
+                    style="font-size:11px;"
+                    onclick="resetToDefault('{{ section.key }}')">
+              Ripristina default
+            </button>
+          </div>
+          <textarea
+            name="{{ section.key }}"
+            id="textarea-{{ section.key }}"
+            class="form-control doc-field"
+            rows="{{ section.rows }}"
+            data-default="{{ section.default_content | e }}"
+            oninput="updateCharCount('{{ section.key }}')">{{ section.content }}</textarea>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="d-flex gap-2 align-items-center mb-5">
+    <button type="submit" class="btn btn-dark px-4">
+      Salva prompt
+    </button>
+    <a href="/admin/ui/campaigns" class="btn btn-outline-secondary">Annulla</a>
+    <span class="text-muted small ms-2">
+      Le modifiche diventano attive immediatamente per le prossime analisi.
+    </span>
+  </div>
+
+</form>
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .accordion-button:not(.collapsed) {
+    background: #eef0f8 !important;
+    color: var(--ec-navy) !important;
+    box-shadow: none !important;
+  }
+  .accordion-button:focus {
+    box-shadow: none !important;
+  }
+  .accordion-button::after {
+    filter: opacity(0.5);
+  }
+  textarea.doc-field {
+    min-height: 80px;
+    resize: vertical;
+  }
+</style>
+<script>
+function updateCharCount(key) {
+  const ta = document.getElementById('textarea-' + key);
+  const el = document.getElementById('charcount-' + key);
+  if (ta && el) {
+    el.textContent = ta.value.length;
+  }
+}
+
+function resetToDefault(key) {
+  const ta = document.getElementById('textarea-' + key);
+  if (!ta) return;
+  const defaultVal = ta.getAttribute('data-default');
+  if (confirm('Ripristinare il testo di default per questa sezione? Il testo attuale verrà perso (fino al salvataggio).')) {
+    ta.value = defaultVal;
+    updateCharCount(key);
+  }
+}
+</script>
+{% endblock %}

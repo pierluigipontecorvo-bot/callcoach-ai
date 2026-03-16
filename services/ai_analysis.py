@@ -74,7 +74,12 @@ def build_analysis_prompt(
     qualification_params: Optional[str] = None,
     client_info: Optional[str] = None,
     operator_email: Optional[str] = None,
+    prompt_sections: Optional[dict] = None,
+    prompt_extra: Optional[str] = None,
 ) -> str:
+
+    from services.prompt_db import _DEFAULT_SECTIONS
+    secs = {**_DEFAULT_SECTIONS, **(prompt_sections or {})}
 
     operator_name = _extract_operator_name(operator_email)
     agente = campaign_info.get("agente", "N/A")
@@ -121,66 +126,35 @@ def build_analysis_prompt(
             'NON inventare parametri che avrebbe dovuto raccogliere.'
         )
 
+    # Build optional extra sections
+    _altre = secs.get("altre_istruzioni", "").strip()
+    _altre_block = f"\n\n## ALTRE ISTRUZIONI\n\n{_altre}" if _altre else ""
+    _extra = (prompt_extra or "").strip()
+    _extra_block = f"\n\n## ISTRUZIONI SPECIFICHE DI CAMPAGNA\n\n{_extra}" if _extra else ""
+
     return f"""## SITUAZIONE
 
-Effoncall (EC) è un'agenzia di telemarketing specializzata nel servizio di presa di appuntamenti B2B altamente qualificati.
-
-Per qualificati si intendono gli appuntamenti che rispettano i parametri concordati con il cliente di EC.
-
-I parametri possono essere sia oggettivi (es. fatturato, dimensione aziendale, area geografica, ecc.) sia soggettivi (es. interesse della persona contattata ad ascoltare il commerciale del cliente, ecc.).
-
-EC ha valori etici molto forti e non consente che negli script si utilizzino informazioni false (es. "stiamo lavorando con aziende del suo settore", "abbiamo risolto problemi", dire che siamo chi non siamo, ecc.).
-
-EC non usa negli script frasi del tipo "Scusi se la disturbo, le rubo solo 30 secondi", che esprimono una posizione di inferiorità. Chi chiama è una persona che sta lavorando e chiama per verificare se sono presenti le condizioni per un incontro.
-
-Gli operatori sono preparati sull'azienda che rappresentano e sui servizi oggetto dell'incontro, ma non sono esperti della materia specifica.
-
-Gli operatori si presentano come se fossero parte dell'azienda del cliente e mai come parte di EC incaricati dal cliente.
-
-Gli operatori di EC chiamano sempre da liste fredde e non hanno informazioni su chi devono raggiungere se non il ruolo, né hanno la possibilità di fare ricerche in anticipo.
-
-Gli operatori EC usano sempre il "Lei" quando parlano con un prospect e hanno un tono molto serio e professionale.
+{secs['contesto']}
 
 
 ## RUOLO
 
-Sei un esperto comunicatore con oltre 20 anni di esperienza, specializzato nello sviluppo di script per telefonate outbound B2B, utilizzando tutti i migliori framework di comunicazione studiati, verificati e di comprovata efficacia.
-
-Sei particolarmente efficace nell'analizzare ogni fase di ogni singola telefonata (apertura, superamento del gatekeeper, introduzione con il decision maker, trasmissione del valore, superamento delle obiezioni, negoziazione e chiusura) e nell'adattarli in funzione del decision maker (un CEO è diverso da un responsabile di reparto, ad esempio).
-
-Come esperto comunicatore sei capace di dare feedback precisi e puntuali agli operatori telefonici outbound, con l'unico scopo di fornire informazioni e consigli che possano aiutare l'operatore a migliorare.
+{secs['ruolo']}
 
 
 ## COMPITI
 
-1. Leggere tutta la documentazione disponibile sul tipo di cliente e sul servizio/prodotto che stiamo proponendo, sullo script e altri documenti disponibili e parametri di qualificazione necessari.
-2. Analizzare le trascrizioni e confrontarle con la documentazione in possesso per dare un report di feedback sulla telefonata in generale e un feedback su com'è stata fatta la qualificazione.
-3. Creare un report dettagliato.
+{secs['compiti']}
 
 
 ## OBIETTIVO DEL COMPITO
 
-Il report deve essere, prima di tutto, uno strumento formativo che consente a chi ha effettuato la telefonata di avere un giudizio preciso, puntuale e documentato su ciò che ha fatto bene e su ciò che poteva essere fatto meglio. Deve fornire esempi concreti a partire dal verbale delle trascrizioni.
-
-Deve anche suggerire azioni pratiche da attuare per migliorare le specifiche abilità, se è il caso.
-
-Deve anche analizzare il tono usato e se è appropriato al contesto e al decision maker.
-
-La telefonata deve avere due parametri di valutazione fondamentali:
-
-**Qualificazione**: deve essere fatto un preciso confronto delle informazioni raccolte con i parametri di qualificazione ed emesso un voto da 1 a 3:
-- 1 = INACCURATA
-- 2 = DA MIGLIORARE
-- 3 = BUONA
-
-Deve essere indicato chiaramente quali parametri non sono stati richiesti e quelli richiesti correttamente.
-
-**Rating di ciascuna fase della telefonata** (apertura, superamento del gatekeeper, introduzione con il decision maker, trasmissione del valore, superamento delle obiezioni, negoziazione, chiusura), sempre con rating da 1 a 3, verificando l'applicazione dei framework di comunicazione e delle indicazioni fornite nei documenti.
+{secs['obiettivo']}
 
 
 ## TONO
 
-Il tono del report deve essere professionale, semplice da comprendere ma non banale. Particolare attenzione a usare frasi che siano sempre d'aiuto e non possano mai essere interpretate come giudizi inappellabili o offensivi. Ad esempio, invece di "il tono usato era confuso e le parole si capivano poco", si può dire "il tono può migliorare in termini di chiarezza rallentando il ritmo, gestendo bene le pause e dandosi del tempo per pronunciare la frase senza imperfezioni".
+{secs['tono']}
 
 
 ## INFORMAZIONI DI CAMPAGNA
@@ -215,11 +189,7 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
 
 {qual_instruction}
 
-2. **SCRIPT DI RIFERIMENTO** → Sezione "### SCRIPT DI RIFERIMENTO" nei documenti sopra. Se non presente, valuta la struttura della chiamata rispetto alle best practice di telemarketing B2B outbound italiano (apertura diretta e professionale senza scuse, value proposition chiara, qualificazione metodica, chiusura sull'appuntamento).
-
-3. **INFORMAZIONI SUL CLIENTE** → Sezione "### INFORMAZIONI SUL CLIENTE E SUL SERVIZIO" nei documenti sopra. Se non presente, utilizza le informazioni deducibili dal codice campagna e dalla trascrizione stessa.
-
-4. **TRASCRIZIONE** → Cita sempre frasi ESATTE dalla trascrizione per i punti di forza, le aree di miglioramento e gli esempi pratici. Non parafrasare: usa le parole esatte dell'operatore tra virgolette.
+{secs['istruzioni_tecniche']}{_altre_block}{_extra_block}
 
 ---
 
@@ -346,6 +316,8 @@ async def analyze_call(
     qualification_params: Optional[str] = None,
     client_info: Optional[str] = None,
     operator_email: Optional[str] = None,
+    prompt_sections: Optional[dict] = None,
+    prompt_extra: Optional[str] = None,
 ) -> dict:
     """
     Send the transcript to Claude and return the structured report dict.
@@ -358,6 +330,8 @@ async def analyze_call(
         qualification_params=qualification_params,
         client_info=client_info,
         operator_email=operator_email,
+        prompt_sections=prompt_sections,
+        prompt_extra=prompt_extra,
     )
 
     logger.info(

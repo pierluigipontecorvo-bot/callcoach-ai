@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
-from models import Analysis, Campaign
+from models import Analysis, Campaign, PromptSection
 from services.campaign_db import GLOBAL_CODE
 from utils.auth import create_access_token, verify_admin_password
 
@@ -160,6 +160,7 @@ async def campaign_new_submit(
     client_info: str = Form(""),
     email_recipients_raw: str = Form(""),
     notes: str = Form(""),
+    prompt_extra: str = Form(""),
     active: str = Form("off"),
 ):
     if not _is_admin(request):
@@ -206,6 +207,7 @@ async def campaign_new_submit(
         client_info=client_info.strip() or None,
         email_recipients=recipients or None,
         notes=notes.strip() or None,
+        prompt_extra=prompt_extra.strip() or None,
         active=(active == "on"),
     )
     db.add(campaign)
@@ -255,6 +257,7 @@ async def campaign_edit_submit(
     client_info: str = Form(""),
     email_recipients_raw: str = Form(""),
     notes: str = Form(""),
+    prompt_extra: str = Form(""),
     active: str = Form("off"),
 ):
     if not _is_admin(request):
@@ -271,6 +274,7 @@ async def campaign_edit_submit(
     campaign.client_info = client_info.strip() or None
     campaign.email_recipients = _parse_recipients(email_recipients_raw) or None
     campaign.notes = notes.strip() or None
+    campaign.prompt_extra = prompt_extra.strip() or None
     campaign.active = (active == "on")
 
     await db.commit()
@@ -411,6 +415,7 @@ async def campaign_duplicate(
         client_info=original.client_info,
         email_recipients=list(original.email_recipients) if original.email_recipients else [],
         notes=original.notes,
+        prompt_extra=original.prompt_extra,
         active=original.active,
     )
     db.add(new_camp)
@@ -418,6 +423,58 @@ async def campaign_duplicate(
 
     msg = quote(f"Configurazione «{new_code}» creata come copia di «{original.code}».")
     return RedirectResponse(url=f"/admin/ui/campaigns?ok={msg}", status_code=303)
+
+
+# ── Prompt editor ─────────────────────────────────────────────────────────────
+
+@router.get("/prompt", response_class=HTMLResponse)
+async def prompt_editor(request: Request, db: AsyncSession = Depends(get_db)):
+    if not _is_admin(request):
+        return _login_redirect()
+    from services.prompt_db import SECTION_METADATA, _DEFAULT_SECTIONS, get_prompt_sections
+    current_sections = await get_prompt_sections()
+    sections_for_template = [
+        {
+            **meta,
+            "content": current_sections.get(meta["key"], _DEFAULT_SECTIONS.get(meta["key"], "")),
+            "default_content": _DEFAULT_SECTIONS.get(meta["key"], ""),
+        }
+        for meta in SECTION_METADATA
+    ]
+    return templates.TemplateResponse("prompt_editor.html", {
+        "request": request,
+        "sections": sections_for_template,
+        "active_page": "prompt",
+        "flash_ok": request.query_params.get("ok", ""),
+        "flash_err": request.query_params.get("err", ""),
+    })
+
+
+@router.post("/prompt")
+async def prompt_editor_save(request: Request, db: AsyncSession = Depends(get_db)):
+    if not _is_admin(request):
+        return _login_redirect()
+    from services.prompt_db import SECTION_METADATA, clear_prompt_sections_cache
+    from models import PromptSection
+    form = await request.form()
+    for idx, meta in enumerate(SECTION_METADATA):
+        key = meta["key"]
+        content = (form.get(key) or "").strip()
+        existing = await db.execute(select(PromptSection).where(PromptSection.section_key == key))
+        row = existing.scalar_one_or_none()
+        if row:
+            row.content = content
+        else:
+            db.add(PromptSection(
+                section_key=key,
+                title=meta["title"],
+                content=content,
+                sort_order=idx,
+            ))
+    await db.commit()
+    clear_prompt_sections_cache()
+    from urllib.parse import quote
+    return RedirectResponse(url=f"/admin/ui/prompt?ok={quote('Prompt salvato con successo.')}", status_code=303)
 
 
 # ── Analyses list ─────────────────────────────────────────────────────────────

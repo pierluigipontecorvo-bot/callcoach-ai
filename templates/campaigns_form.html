@@ -218,6 +218,23 @@
   </div>
   {% endif %}
 
+  {# ── Istruzioni specifiche di campagna ── #}
+  {% if not is_global %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+      <span>Istruzioni specifiche per l'AI</span>
+      <span class="text-muted small fw-normal">Override locale al prompt globale</span>
+    </div>
+    <div class="card-body">
+      <textarea name="prompt_extra" class="form-control doc-field" rows="6"
+                placeholder="Istruzioni aggiuntive specifiche per questa campagna. Esempio: «Questa campagna non prevede mai gatekeeper, non valutare quella fase.» — Vuoto = usa solo il prompt globale.">{{ campaign.prompt_extra or (form_data.prompt_extra if form_data else '') }}</textarea>
+      <div class="form-text">
+        Queste istruzioni vengono aggiunte al prompt globale con alta priorità, solo per le analisi di questa campagna.
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {# ── Note interne ── #}
   <div class="card shadow-sm mb-4">
     <div class="card-header fw-semibold">Note interne</div>

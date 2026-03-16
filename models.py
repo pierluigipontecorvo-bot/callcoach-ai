@@ -7,6 +7,16 @@ from sqlalchemy.dialects.postgresql import JSONB
 from database import Base
 
 
+class PromptSection(Base):
+    __tablename__ = "prompt_sections"
+    id = Column(Integer, primary_key=True)
+    section_key = Column(String(50), unique=True, nullable=False)
+    title = Column(String(100), nullable=False)
+    content = Column(Text, nullable=False, server_default="")
+    sort_order = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Campaign(Base):
     __tablename__ = "campaigns"
 
@@ -24,6 +34,7 @@ class Campaign(Base):
     client_info = Column(Text)
     email_recipients = Column(ARRAY(String))
     notes = Column(Text)                   # internal notes
+    prompt_extra = Column(Text)            # per-campaign AI prompt override
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

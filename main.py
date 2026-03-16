@@ -62,6 +62,37 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("operator_name migration failed (non-fatal): %s", exc)
 
+    # ── Create prompt_sections table if it doesn't exist ─────────────────────
+    try:
+        from sqlalchemy import text
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS prompt_sections (
+                    id SERIAL PRIMARY KEY,
+                    section_key VARCHAR(50) UNIQUE NOT NULL,
+                    title VARCHAR(100) NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    sort_order INT NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await session.commit()
+    except Exception as exc:
+        logger.warning("prompt_sections table migration failed (non-fatal): %s", exc)
+
+    # ── Add prompt_extra column to campaigns if not present ───────────────────
+    try:
+        from sqlalchemy import text
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS prompt_extra TEXT")
+            )
+            await session.commit()
+    except Exception as exc:
+        logger.warning("campaigns.prompt_extra migration failed (non-fatal): %s", exc)
+
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────

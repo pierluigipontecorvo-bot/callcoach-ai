@@ -274,6 +274,14 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
 
     # ── 5. Claude analysis ────────────────────────────────────────────────────
     await _update_progress(analysis_id, 65, "Analisi AI in corso...")
+
+    from services.prompt_db import get_prompt_sections
+    prompt_sections = {}
+    try:
+        prompt_sections = await get_prompt_sections()
+    except Exception as exc:
+        logger.warning("[%s] Could not load prompt sections: %s", appointment_id, exc)
+
     try:
         report = await analyze_call(
             transcript=transcript,
@@ -282,6 +290,8 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             qualification_params=merged_qual,
             client_info=merged_client_info,
             operator_email=operator_email,
+            prompt_sections=prompt_sections,
+            prompt_extra=campaign_db.prompt_extra if campaign_db else None,
         )
     except Exception as exc:
         msg = f"Claude analysis failed: {exc}"
