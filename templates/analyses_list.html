@@ -125,12 +125,12 @@
             {% if a.processing_status == 'completed' and a.qualification_level not in ('non_in_target', 'errore_tecnico') %}
             <button class="btn btn-sm btn-outline-primary ms-1"
                     style="padding:2px 8px;font-size:12px;"
-                    title="Invia email a tutti i destinatari"
-                    onclick="sendEmail({{ a.id }}, 'all', this)">✉ Tutti</button>
+                    title="Invia email all'operatore"
+                    onclick="sendEmail({{ a.id }}, 'operator', this)">✉ Operatore</button>
             <button class="btn btn-sm btn-outline-secondary ms-1"
                     style="padding:2px 8px;font-size:12px;"
                     title="Invia solo a inoltro@effoncall.com"
-                    onclick="sendEmail({{ a.id }}, 'inoltra', this)">✉ Inoltro</button>
+                    onclick="sendEmail({{ a.id }}, 'inoltro', this)">✉ Inoltro</button>
             {% endif %}
             <form method="post" action="/admin/ui/analyses/{{ a.id }}/delete"
                   style="display:inline;"

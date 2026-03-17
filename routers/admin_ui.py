@@ -558,7 +558,7 @@ async def analysis_send_email(
     analysis_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    mode: str = "all",   # "all" | "inoltra"
+    mode: str = "operator",   # "operator" | "inoltro"
 ):
     if not _is_admin(request):
         return JSONResponse({"ok": False, "error": "non autorizzato"}, status_code=403)
@@ -571,37 +571,24 @@ async def analysis_send_email(
         return JSONResponse({"ok": False, "error": "nessun report HTML disponibile"}, status_code=400)
 
     from services.email_service import send_analysis_report
-    from config import settings as cfg
 
     _INOLTRO = "inoltro@effoncall.com"
 
-    if mode == "inoltra":
+    if mode == "inoltro":
         recipients = [_INOLTRO]
     else:
-        # Ricostruisce la lista completa come farebbe webhook.py
-        recipients: list[str] = []
-        # Destinatari campagna
-        camp_result = await db.execute(
-            select(Campaign).where(Campaign.code == (analysis.campaign_code or ""))
-        )
-        campaign = camp_result.scalar_one_or_none()
-        if campaign and campaign.email_recipients:
-            recipients = list(campaign.email_recipients)
-        if not recipients:
-            recipients = [cfg.fallback_email]
-        # Operatore
+        # mode == "operator": ricava l'email dell'operatore dal campo operator_name
+        import re as _re
         op_email = ""
         if analysis.operator_name:
-            import re as _re
             m = _re.match(r'^(\d+)-(.+)$', analysis.operator_name.strip())
             if m:
-                num, name = m.group(1), m.group(2).strip().lower().replace(" ", ".")
+                num  = m.group(1)
+                name = m.group(2).strip().lower().replace(" ", ".")
                 op_email = f"op.{num}.{name}@effoncall.com"
-        if op_email and op_email not in recipients:
-            if not (campaign and campaign.email_no_operator):
-                recipients.insert(0, op_email)
-        if _INOLTRO not in recipients:
-            recipients.append(_INOLTRO)
+        if not op_email:
+            return JSONResponse({"ok": False, "error": "indirizzo operatore non ricavabile"}, status_code=400)
+        recipients = [op_email]
 
     try:
         await send_analysis_report(
