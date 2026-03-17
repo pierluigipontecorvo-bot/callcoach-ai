@@ -192,6 +192,9 @@ function sendEmail(analysisId, mode, btn) {
         btn.textContent = '✓ Inviata';
         btn.classList.remove('btn-outline-primary','btn-outline-secondary');
         btn.classList.add('btn-success');
+        var dest = data.recipients ? data.recipients.join('\n') : '—';
+        btn.title = 'Inviata a: ' + (data.recipients || []).join(', ');
+        alert('✅ Email inviata a:\n\n' + dest);
       } else {
         btn.textContent = '✗ Errore';
         btn.classList.add('btn-danger');
