@@ -551,15 +551,16 @@ async def archivio(
     result = await db.execute(stmt)
     analyses = result.scalars().all()
 
-    # Mesi disponibili per il selettore
-    from sqlalchemy import text as sa_text
-    months_result = await db.execute(
-        sa_text(
-            "SELECT DISTINCT TO_CHAR(created_at, 'YYYY-MM') AS ym "
-            "FROM analyses WHERE created_at IS NOT NULL ORDER BY ym DESC"
-        )
+    # Mesi disponibili: ricavati in Python dagli oggetti già caricati
+    # (evita query raw TO_CHAR che causa problemi di transazione su Supabase async)
+    _all_months_result = await db.execute(
+        select(Analysis.created_at).where(Analysis.created_at.is_not(None))
     )
-    available_months = [r.ym for r in months_result.all() if r.ym]
+    _all_dates = _all_months_result.scalars().all()
+    available_months = sorted(
+        set(d.strftime("%Y-%m") for d in _all_dates if d),
+        reverse=True,
+    )
 
     from utils.helpers import utcnow
     return templates.TemplateResponse(
