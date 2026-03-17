@@ -529,6 +529,27 @@ async def acuity_webhook(
     if not should_analyze(full_appointment):
         return {"status": "skipped", "reason": "label not in trigger set"}
 
+    # Se l'azione NON è una nuova prenotazione, verifica che non esista già
+    # un'analisi completata per questo appuntamento — evita ri-analisi su
+    # semplici modifiche/riprogrammazioni mantenendo l'etichetta PRESO.
+    if action and action != "scheduled":
+        from database import AsyncSessionLocal
+        from models import Analysis
+        from sqlalchemy import select as _select
+        async with AsyncSessionLocal() as _sess:
+            existing = await _sess.scalar(
+                _select(Analysis).where(
+                    Analysis.appointment_id == str(appointment_id),
+                    Analysis.processing_status == "completed",
+                )
+            )
+        if existing:
+            logger.info(
+                "[%s] Skipped re-analysis: action=%s, analisi #%d già completata",
+                appointment_id, action, existing.id,
+            )
+            return {"status": "skipped", "reason": "analysis already completed"}
+
     # Respond immediately with 200 — pipeline runs in background
     background_tasks.add_task(
         run_analysis_pipeline,
