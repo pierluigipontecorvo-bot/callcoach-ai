@@ -157,15 +157,20 @@
   </div>
 </div>
 
-{# ── HTML Report — nascosto se errore tecnico, altrimenti iframe full-width ── #}
+{# ── HTML Report — iniettato direttamente (no iframe), isolato con Shadow DOM ── #}
 {% if analysis.report_html and not _is_errore_tecnico %}
-<div class="mb-4" style="margin-left:-1.5rem; margin-right:-1.5rem;">
-  <iframe id="reportFrame"
-          srcdoc="{{ analysis.report_html | e }}"
-          style="width:100%; border:none; display:block; min-height:400px;"
-          scrolling="no">
-  </iframe>
-</div>
+<div id="reportHost" class="mb-4" style="margin-left:-1.5rem; margin-right:-1.5rem; display:block;"></div>
+<script>
+(function() {
+  var host = document.getElementById('reportHost');
+  var shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML = {{ analysis.report_html | tojson }};
+  /* override max-width so report fills the admin UI panel */
+  var override = document.createElement('style');
+  override.textContent = 'body { max-width: 100% !important; padding: 0 !important; background: #f4f5f7; } ';
+  shadow.appendChild(override);
+})();
+</script>
 {% elif _is_errore_tecnico %}
 <div class="card mb-4 border-0" style="background:#fff8e1;">
   <div class="card-body text-center py-5" style="color:#7f5200;">
@@ -197,32 +202,6 @@
 
 {% block scripts %}
 <script>
-/* ── Auto-resize iframe to full content height ── */
-(function () {
-  var frame = document.getElementById('reportFrame');
-  if (!frame) return;
-
-  function resize() {
-    try {
-      var doc = frame.contentDocument || frame.contentWindow.document;
-      var h = Math.max(
-        doc.body ? doc.body.scrollHeight : 0,
-        doc.documentElement ? doc.documentElement.scrollHeight : 0
-      );
-      if (h > 100) frame.style.height = h + 'px';
-    } catch (_) {}
-  }
-
-  frame.addEventListener('load', function () {
-    resize();
-    /* observe size changes inside iframe (e.g. collapsibles) */
-    try {
-      var ro = new (frame.contentWindow.ResizeObserver || window.ResizeObserver)(resize);
-      ro.observe(frame.contentDocument.body);
-    } catch (_) {}
-  });
-})();
-
 /* ── Transcript toggle icon ── */
 (function () {
   var el = document.getElementById('transcriptCollapse');
