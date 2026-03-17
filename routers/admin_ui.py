@@ -1101,6 +1101,65 @@ async def trigger_appointment_analysis(
     return JSONResponse({"ok": True, "appointment_id": appointment_id})
 
 
+# ── Sidial test (/admin/ui/sidial-test) ──────────────────────────────────────
+
+@router.get("/sidial-test", response_class=JSONResponse)
+async def sidial_test(request: Request, phone: str = ""):
+    """
+    Testa la connessione Sidial per un numero di telefono.
+    GET /admin/ui/sidial-test?phone=0123456789
+    Ritorna JSON con leads trovati e registrazioni disponibili.
+    """
+    if not _is_admin(request):
+        return JSONResponse({"error": "non autorizzato"}, status_code=401)
+
+    from services.sidial import (
+        _normalize_phone, _search_leads_by_phone, _search_recs_by_lead
+    )
+    from config import settings as cfg
+
+    result: dict = {
+        "sidial_url": cfg.sidial_api_url,
+        "token_len": len(cfg.sidial_api_token) if cfg.sidial_api_token else 0,
+        "phone_raw": phone,
+        "phone_norm": _normalize_phone(phone) if phone else "",
+        "leads": [],
+        "recordings": [],
+        "error": None,
+    }
+
+    if not phone:
+        result["error"] = "Passa ?phone=NUMERO nella query string"
+        return JSONResponse(result)
+
+    try:
+        norm = _normalize_phone(phone)
+        leads = await _search_leads_by_phone(norm)
+        if not leads and norm != phone:
+            leads = await _search_leads_by_phone(phone)
+        result["leads"] = [
+            {"id": l.get("id"), "phone1": l.get("phone1"), "phone2": l.get("phone2"),
+             "name": l.get("name") or l.get("companyName") or ""}
+            for l in leads
+        ]
+        for lead in leads:
+            lead_id = str(lead.get("id") or "")
+            if not lead_id:
+                continue
+            recs = await _search_recs_by_lead(lead_id)
+            for r in recs:
+                result["recordings"].append({
+                    "id": r.get("id"),
+                    "leadId": lead_id,
+                    "createdWhen": r.get("createdWhen"),
+                    "callLength": r.get("callLength"),
+                })
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    return JSONResponse(result)
+
+
 # ── Global documents (/admin/ui/global) ──────────────────────────────────────
 
 @router.get("/global", response_class=HTMLResponse)
