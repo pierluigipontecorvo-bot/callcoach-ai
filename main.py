@@ -113,6 +113,31 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("global_documents table migration failed (non-fatal): %s", exc)
 
+    # ── Reset analisi bloccate in 'processing'/'pending' al riavvio ──────────
+    # Se il container si riavvia mentre un'analisi è in corso, il record DB
+    # rimane bloccato su 'processing' per sempre. Lo resettiamo a 'error' con
+    # qualification_level='errore_tecnico' in modo che appaia come tale nella UI.
+    try:
+        from sqlalchemy import text
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text("""
+                UPDATE analyses
+                SET processing_status = 'error',
+                    qualification_level = 'errore_tecnico',
+                    step_message = 'Analisi interrotta per riavvio del server.',
+                    report_json = COALESCE(report_json, '{}'::jsonb) || '{"errore_tecnico": true}'::jsonb
+                WHERE processing_status IN ('processing', 'pending')
+            """))
+            await session.commit()
+            if result.rowcount:
+                logger.warning(
+                    "Startup cleanup: reset %d analisi bloccate → errore_tecnico",
+                    result.rowcount,
+                )
+    except Exception as exc:
+        logger.warning("Startup cleanup analisi bloccate fallito (non-fatal): %s", exc)
+
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────
