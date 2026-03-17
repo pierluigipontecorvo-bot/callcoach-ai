@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
 
-    # Resend transactional email (preferred — bypasses Railway SMTP block)
-    resend_api_key: str = ""
+    # Brevo transactional email HTTP API (bypasses Railway SMTP block)
+    brevo_api_key: str = ""
 
     # OpenAI — Whisper API per trascrizione cloud (sostituisce Whisper locale)
     openai_api_key: str = ""

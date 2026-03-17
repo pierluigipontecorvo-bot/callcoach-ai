@@ -1,86 +1,24 @@
 """
-Email service — Resend API (HTTPS) with Aruba SMTP fallback.
-
-Railway blocks outbound SMTP (ports 465/587 to Aruba are rejected).
-Resend works via HTTPS on port 443, which Railway allows.
-Set RESEND_API_KEY env var to enable Resend; otherwise falls back to SMTP.
+Email service — Brevo HTTP API (porta 443, funziona da Railway).
+Railway blocca tutte le porte SMTP; usiamo l'API HTTP di Brevo.
+Richiede BREVO_API_KEY nelle variabili Railway.
 """
 
 import logging
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
-import aiosmtplib
 import httpx
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Rating 1-3 → emoji for email subject
-_RATING_EMOJI = {1: "❌", 2: "⚠️", 3: "✅"}
-# Backward compat with old string-based levels
 _LEVEL_EMOJI = {
     "inaccurata": "❌", "da_migliorare": "⚠️", "buona": "✅",
-    "eccellente": "⭐", "corretta": "✅", "insufficiente": "❌",
+    "eccellente": "⭐", "sufficiente": "✅", "corretta": "✅", "insufficiente": "❌",
 }
 
 _FROM_ADDRESS = settings.email_from_address
-
-
-async def _send_via_resend(
-    recipients: list[str],
-    html_content: str,
-    subject: str,
-) -> None:
-    """Send via Resend REST API (HTTPS — no SMTP port required)."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {settings.resend_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "from": _FROM_ADDRESS,
-                "to": recipients,
-                "subject": subject,
-                "html": html_content,
-            },
-        )
-        if resp.status_code not in (200, 201):
-            raise RuntimeError(
-                f"Resend API error {resp.status_code}: {resp.text[:300]}"
-            )
-    logger.info("Email sent via Resend to %s", recipients)
-
-
-async def _send_via_smtp(
-    recipients: list[str],
-    html_content: str,
-    subject: str,
-) -> None:
-    """Send via Aruba SMTP (fallback — may be blocked from Railway)."""
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = _FROM_ADDRESS
-    msg["To"] = ", ".join(recipients)
-    msg.attach(MIMEText(html_content, "html", "utf-8"))
-
-    use_tls   = settings.smtp_port == 465
-    start_tls = settings.smtp_port in (587, 2525)
-
-    await aiosmtplib.send(
-        msg,
-        hostname=settings.smtp_host,
-        port=settings.smtp_port,
-        username=settings.smtp_user,
-        password=settings.smtp_password,
-        use_tls=use_tls,
-        start_tls=start_tls,
-    )
-    logger.info("Email sent via SMTP to %s", recipients)
 
 
 async def send_analysis_report(
@@ -91,20 +29,50 @@ async def send_analysis_report(
     appointment_datetime: str,
 ) -> None:
     """
-    Send the HTML analysis report.
-    Uses Resend API if RESEND_API_KEY is configured, otherwise SMTP.
-    Raises on send failure so the caller can record the error.
+    Invia il report via Brevo HTTP API (porta 443).
+    Richiede BREVO_API_KEY in Railway Variables.
     """
+    if not settings.brevo_api_key:
+        raise RuntimeError(
+            "BREVO_API_KEY non configurata. Aggiungila nelle variabili Railway."
+        )
+
     emoji = _LEVEL_EMOJI.get(qualification_level, "📊")
     date_part = appointment_datetime[:10] if appointment_datetime else "N/A"
     subject = f"{emoji} CallCoach AI — Report {operator_name} — {date_part}"
 
-    logger.info("Sending email to %s — subject: %s", recipients, subject)
+    logger.info("Invio email Brevo a %s — oggetto: %s", recipients, subject)
 
-    if settings.resend_api_key:
-        await _send_via_resend(recipients, html_content, subject)
+    # Estrai nome e indirizzo dal FROM "Nome <email@dom.it>"
+    import re as _re
+    m = _re.match(r'^(.+?)\s*<(.+?)>$', _FROM_ADDRESS.strip())
+    if m:
+        from_name, from_email = m.group(1).strip(), m.group(2).strip()
     else:
-        await _send_via_smtp(recipients, html_content, subject)
+        from_name, from_email = "CallCoach AI", _FROM_ADDRESS.strip()
+
+    payload = {
+        "sender": {"name": from_name, "email": from_email},
+        "to": [{"email": r} for r in recipients],
+        "subject": subject,
+        "htmlContent": html_content,
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": settings.brevo_api_key,
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Brevo API error {resp.status_code}: {resp.text[:300]}"
+            )
+
+    logger.info("Email inviata via Brevo a %s", recipients)
 
 
 # ── HTML helpers ───────────────────────────────────────────────────────────────

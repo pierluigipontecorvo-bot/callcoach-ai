@@ -319,17 +319,13 @@ async def test_email(request: Request):
         return JSONResponse({
             "ok": True,
             "to": to_addr,
-            "smtp_host": cfg.smtp_host,
-            "smtp_port": cfg.smtp_port,
-            "resend_key_set": bool(cfg.resend_api_key),
+            "brevo_key_set": bool(cfg.brevo_api_key),
         })
     except Exception as exc:
         return JSONResponse({
             "ok": False,
             "error": str(exc),
-            "smtp_host": cfg.smtp_host,
-            "smtp_port": cfg.smtp_port,
-            "resend_key_set": bool(cfg.resend_api_key),
+            "brevo_key_set": bool(cfg.brevo_api_key),
         }, status_code=500)
 
 
