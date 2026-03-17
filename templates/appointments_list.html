@@ -113,6 +113,52 @@
     } catch (e) {}
   }
 
+  /* ── Filtri per data di presa / operatore / campagna ── */
+  function initFilters() {
+    function applyFilters() {
+      var grpVal  = (document.querySelector('input[name="grp"]:checked') || {}).value || 'all';
+      var opVal   = (document.getElementById('op-filter')   || {}).value || '';
+      var campVal = (document.getElementById('camp-filter') || {}).value || '';
+      var rows = document.querySelectorAll('#apptTable tbody tr');
+      var visible = 0;
+      rows.forEach(function (row) {
+        var grp  = row.dataset.group    || '';
+        var op   = row.dataset.op       || '';
+        var camp = row.dataset.campaign || '';
+        var show = (grpVal === 'all' || grp === grpVal)
+                && (opVal   === ''   || op   === opVal)
+                && (campVal === ''   || camp === campVal);
+        row.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      var lbl = document.getElementById('appt-count-label');
+      if (lbl) lbl.textContent = visible + ' appuntamenti';
+    }
+
+    /* Collega i listener ai controlli filtro */
+    document.querySelectorAll('input[name="grp"]').forEach(function (el) {
+      el.addEventListener('change', applyFilters);
+    });
+    var opSel = document.getElementById('op-filter');
+    if (opSel) opSel.addEventListener('change', applyFilters);
+    var campSel = document.getElementById('camp-filter');
+    if (campSel) campSel.addEventListener('change', applyFilters);
+
+    /* Pre-seleziona "Presi oggi" se esistono, altrimenti "Presi ieri" */
+    var todayRadio = document.getElementById('grp-tod');
+    var yesterdayRadio = document.getElementById('grp-yes');
+    if (todayRadio) {
+      var hasTodayRows = document.querySelectorAll('#apptTable tbody tr[data-group="today"]').length > 0;
+      var hasYestRows   = document.querySelectorAll('#apptTable tbody tr[data-group="yesterday"]').length > 0;
+      if (hasTodayRows) {
+        todayRadio.checked = true;
+      } else if (hasYestRows && yesterdayRadio) {
+        yesterdayRadio.checked = true;
+      }
+    }
+    applyFilters();
+  }
+
   /* ── Spinner HTML ── */
   function spinnerHtml() {
     return '<div class="text-center py-5 text-muted">' +
@@ -160,6 +206,7 @@
         }
 
         initSort();
+        initFilters();
         document.getElementById('appt-refresh').style.display = '';
       })
       .catch(function (err) {

@@ -4,6 +4,60 @@
      data-subtitle="Ultimi 30 giorni + tutti i futuri — {{ appointments | length }} appuntamenti">
 
 {% if appointments %}
+
+{# ── Filter bar ──────────────────────────────────────────────────────────── #}
+<div class="mb-3 d-flex flex-wrap align-items-center gap-2" id="appt-filters">
+
+  {# Raggruppamento per data di PRESA (dateCreated) — non data appuntamento #}
+  <div class="btn-group btn-group-sm" role="group" id="grp-filter">
+    <input type="radio" class="btn-check" name="grp" id="grp-all"  value="all"       autocomplete="off" checked>
+    <label class="btn btn-outline-secondary" for="grp-all">Tutti</label>
+
+    <input type="radio" class="btn-check" name="grp" id="grp-tod"  value="today"     autocomplete="off">
+    <label class="btn btn-outline-secondary" for="grp-tod">
+      Presi oggi
+      {% set _nt = appointments | selectattr('date_group','equalto','today') | list | length %}
+      {% if _nt %}<span class="badge bg-primary ms-1" style="font-size:9px;">{{ _nt }}</span>{% endif %}
+    </label>
+
+    <input type="radio" class="btn-check" name="grp" id="grp-yes"  value="yesterday" autocomplete="off">
+    <label class="btn btn-outline-secondary" for="grp-yes">
+      Presi ieri
+      {% set _ny = appointments | selectattr('date_group','equalto','yesterday') | list | length %}
+      {% if _ny %}<span class="badge bg-secondary ms-1" style="font-size:9px;">{{ _ny }}</span>{% endif %}
+    </label>
+
+    <input type="radio" class="btn-check" name="grp" id="grp-past" value="past"      autocomplete="off">
+    <label class="btn btn-outline-secondary" for="grp-past">
+      Precedenti
+      {% set _np = appointments | selectattr('date_group','equalto','past') | list | length %}
+      {% if _np %}<span class="badge bg-secondary ms-1" style="font-size:9px;">{{ _np }}</span>{% endif %}
+    </label>
+  </div>
+
+  {# Operator dropdown #}
+  {% if unique_operators %}
+  <select id="op-filter" class="form-select form-select-sm" style="max-width:180px;">
+    <option value="">Tutti gli operatori</option>
+    {% for op in unique_operators %}
+    <option value="{{ op }}">{{ op }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  {# Campaign dropdown #}
+  {% if unique_campaigns %}
+  <select id="camp-filter" class="form-select form-select-sm" style="max-width:220px;">
+    <option value="">Tutte le campagne</option>
+    {% for c in unique_campaigns %}
+    <option value="{{ c }}">{{ c }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  <span id="appt-count-label" class="text-muted small ms-auto"></span>
+</div>
+
 <div class="card shadow-sm">
   <div class="table-responsive">
     <table id="apptTable" class="table table-hover mb-0 align-middle" style="font-size:13px;">
@@ -38,7 +92,10 @@
       </thead>
       <tbody>
         {% for a in appointments %}
-        <tr data-appt-id="{{ a.id }}">
+        <tr data-appt-id="{{ a.id }}"
+            data-group="{{ a.date_group }}"
+            data-op="{{ a.op_display }}"
+            data-campaign="{{ a.campaign_code }}">
 
           {# Campagna #}
           <td data-val="{{ a.campaign_code }}">

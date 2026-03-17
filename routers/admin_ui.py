@@ -855,6 +855,7 @@ async def appointments_data(
         ]
 
         dt_raw = a.get("datetime", "")
+        dt_obj = None
         try:
             dt_obj = parse_iso_datetime(dt_raw)
             is_past = dt_obj < now if dt_obj else False
@@ -863,35 +864,62 @@ async def appointments_data(
             is_past = False
             dt_display = dt_raw[:16].replace("T", " ")
 
-        # Acuity "dateCreated" = when the appointment was booked
-        # Acuity returns Italian locale strings, e.g. "4 marzo 2020"
+        # Acuity "dateCreated" = quando l'appuntamento è stato PRESO (prenotato)
         created_raw = a.get("dateCreated", "")
         created_display = "—"
+        _created_date = None   # date object — usato per il raggruppamento
+
         if created_raw:
-            _IT_MONTHS = {
-                "gennaio":1,"febbraio":2,"marzo":3,"aprile":4,"maggio":5,"giugno":6,
-                "luglio":7,"agosto":8,"settembre":9,"ottobre":10,"novembre":11,"dicembre":12,
-            }
-            import re as _re
-            _m = _re.match(r"(\d{1,2})\s+(\w+)\s+(\d{4})", created_raw.strip(), _re.IGNORECASE)
-            if _m:
-                _day, _mon, _yr = int(_m.group(1)), _m.group(2).lower(), int(_m.group(3))
-                if _mon in _IT_MONTHS:
-                    from datetime import date as _date
-                    created_display = _date(_yr, _IT_MONTHS[_mon], _day).strftime("%d/%m/%y")
-                else:
-                    created_display = created_raw[:10]
+            # ── 1. Prova ISO 8601 (formato più comune da Acuity API) ───────────
+            # Es: "2024-03-17T14:30:00-0500" oppure "2024-03-17T14:30:00+0000"
+            _iso_dt = parse_iso_datetime(created_raw)
+            if _iso_dt:
+                _created_date = _iso_dt.date()
+                created_display = _created_date.strftime("%d/%m/%y")
             else:
-                # Fallback: try ISO or English formats
-                from datetime import datetime as _dt
-                for _fmt in ("%Y-%m-%d", "%B %d, %Y", "%d/%m/%Y"):
-                    try:
-                        created_display = _dt.strptime(created_raw.strip(), _fmt).strftime("%d/%m/%y")
-                        break
-                    except ValueError:
-                        pass
+                # ── 2. Prova locale italiana, es. "17 marzo 2024" ─────────────
+                _IT_MONTHS = {
+                    "gennaio":1,"febbraio":2,"marzo":3,"aprile":4,"maggio":5,"giugno":6,
+                    "luglio":7,"agosto":8,"settembre":9,"ottobre":10,"novembre":11,"dicembre":12,
+                }
+                import re as _re
+                _m = _re.match(r"(\d{1,2})\s+(\w+)\s+(\d{4})", created_raw.strip(), _re.IGNORECASE)
+                if _m:
+                    _day2, _mon2, _yr2 = int(_m.group(1)), _m.group(2).lower(), int(_m.group(3))
+                    if _mon2 in _IT_MONTHS:
+                        from datetime import date as _date2
+                        _created_date = _date2(_yr2, _IT_MONTHS[_mon2], _day2)
+                        created_display = _created_date.strftime("%d/%m/%y")
+                    else:
+                        created_display = created_raw[:10]
                 else:
-                    created_display = created_raw[:10]
+                    # ── 3. Altri formati fallback ─────────────────────────────
+                    from datetime import datetime as _dt2
+                    for _fmt in ("%Y-%m-%d", "%B %d, %Y", "%d/%m/%Y"):
+                        try:
+                            _created_date = _dt2.strptime(created_raw.strip(), _fmt).date()
+                            created_display = _created_date.strftime("%d/%m/%y")
+                            break
+                        except ValueError:
+                            pass
+                    else:
+                        created_display = created_raw[:10]
+
+        # Date group basato sulla data di PRESA (dateCreated), non data appuntamento
+        _today_date = now.date()
+        _yest_date = (_today_date - timedelta(days=1))
+        try:
+            if _created_date is None:
+                date_group = "other"
+                logger.debug("dateCreated parse failed for appt %s, raw=%r", appt_id, created_raw)
+            elif _created_date == _today_date:
+                date_group = "today"
+            elif _created_date == _yest_date:
+                date_group = "yesterday"
+            else:
+                date_group = "past"
+        except Exception:
+            date_group = "other"
 
         enriched.append({
             "id": appt_id,
@@ -906,6 +934,7 @@ async def appointments_data(
             "op_display": op_display,
             "labels": labels,
             "is_past": is_past,
+            "date_group": date_group,   # future | today | yesterday | past | other
             "analysis": analyses_map.get(appt_id),
         })
 
@@ -914,12 +943,24 @@ async def appointments_data(
         for a in enriched
     )
 
+    # Unique operators and campaign codes for filter dropdowns
+    unique_operators = sorted({
+        e["op_display"] for e in enriched
+        if e["op_display"] and e["op_display"] not in ("—", "")
+    })
+    unique_campaigns = sorted({
+        e["campaign_code"] for e in enriched
+        if e["campaign_code"] and e["campaign_code"] not in ("—", "")
+    })
+
     return templates.TemplateResponse(
         "appointments_table_fragment.html",
         {
             "request": request,
             "appointments": enriched,
             "has_processing": has_processing,
+            "unique_operators": unique_operators,
+            "unique_campaigns": unique_campaigns,
         },
     )
 

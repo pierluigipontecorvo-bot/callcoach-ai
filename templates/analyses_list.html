@@ -18,9 +18,32 @@
 </div>
 
 {% if analyses %}
+
+{# ── Search + filter bar ──────────────────────────────────────────────────── #}
+<div class="mb-3 d-flex flex-wrap align-items-center gap-2">
+  <input type="search" id="ana-search" class="form-control form-control-sm"
+         placeholder="🔍 Cerca operatore, campagna…"
+         style="max-width:260px;"
+         oninput="filterAnalyses()">
+
+  <select id="ana-qual-filter" class="form-select form-select-sm" style="max-width:200px;"
+          onchange="filterAnalyses()">
+    <option value="">Tutte le qualifiche</option>
+    <option value="eccellente">Eccellente</option>
+    <option value="buona">Buona</option>
+    <option value="sufficiente">Sufficiente</option>
+    <option value="da_migliorare">Da migliorare</option>
+    <option value="inaccurata">Inaccurata</option>
+    <option value="non_in_target">Non in target</option>
+    <option value="errore_tecnico">Errore tecnico</option>
+  </select>
+
+  <span id="ana-count-label" class="text-muted small ms-auto"></span>
+</div>
+
 <div class="card shadow-sm">
   <div class="table-responsive">
-    <table class="table table-hover mb-0 align-middle">
+    <table class="table table-hover mb-0 align-middle" id="anaTable">
       <thead class="table-light">
         <tr>
           <th>#</th>
@@ -36,7 +59,10 @@
       </thead>
       <tbody>
         {% for a in analyses %}
-        <tr data-analysis-id="{{ a.id }}">
+        <tr data-analysis-id="{{ a.id }}"
+            data-op="{{ a.operator_name or '' }}"
+            data-campaign="{{ a.campaign_code or '' }}"
+            data-qual="{{ a.qualification_level or '' }}">
           <td class="text-muted small">{{ a.id }}</td>
           <td><code class="small">{{ a.campaign_code or "—" }}</code></td>
           <td>{{ a.operator_name or "<span class='text-muted'>—</span>" | safe }}</td>
@@ -123,6 +149,30 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+/* ── Client-side filter for analyses list ── */
+function filterAnalyses() {
+  var q    = (document.getElementById('ana-search').value || '').toLowerCase().trim();
+  var qual = document.getElementById('ana-qual-filter').value || '';
+  var rows = document.querySelectorAll('#anaTable tbody tr[data-analysis-id]');
+  var visible = 0;
+  rows.forEach(function (row) {
+    var op   = (row.dataset.op       || '').toLowerCase();
+    var camp = (row.dataset.campaign || '').toLowerCase();
+    var rq   = row.dataset.qual || '';
+    var matchText = !q   || op.includes(q) || camp.includes(q);
+    var matchQual = !qual || rq === qual;
+    var show = matchText && matchQual;
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  var lbl = document.getElementById('ana-count-label');
+  if (lbl) lbl.textContent = visible + ' analisi';
+}
+/* Init count on load */
+document.addEventListener('DOMContentLoaded', function () { filterAnalyses(); });
+</script>
+
 <script>
 (function () {
   var _timer = null;

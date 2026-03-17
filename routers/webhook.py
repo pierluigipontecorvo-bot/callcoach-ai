@@ -2,6 +2,7 @@
 Acuity Scheduling webhook receiver + background analysis pipeline.
 """
 
+import asyncio
 import json
 import logging
 from urllib.parse import parse_qs
@@ -163,19 +164,35 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     appointment_id = str(appointment_data.get("id", "unknown"))
     logger.info("[%s] Pipeline started (account=%d)", appointment_id, acuity_account)
 
-    # Crea subito il record con status=processing (visibile nella UI)
-    analysis_id = await _create_processing_record(appointment_id, acuity_account)
-
-    # ── 1. Parse campaign code ────────────────────────────────────────────────
-    await _update_progress(analysis_id, 5, "Verifica codice campagna...")
+    # ── 0. Parse campaign code (pre-flight, before creating any DB record) ────
     appointment_type = appointment_data.get("type", "")
     campaign_info = parse_campaign_code(appointment_type)
 
     if not campaign_info.get("valid"):
-        msg = f"Unparseable campaign code: {appointment_type!r}"
-        logger.warning("[%s] %s", appointment_id, msg)
-        await _save_error(analysis_id, appointment_id, msg, acuity_account)
+        logger.warning("[%s] Unparseable campaign code: %r — skip (no DB record)", appointment_id, appointment_type)
         return
+
+    # ── 0b. Check campaign exists in DB — if not configured, skip silently ───
+    # (user requested: "se la campagna non è stata ancora creata non deve fare analisi")
+    _campaign_pre = None
+    try:
+        _campaign_pre = await get_campaign_by_code(campaign_info["raw"])
+    except Exception as _exc:
+        logger.warning("[%s] Could not check campaign in DB: %s — proceeding anyway", appointment_id, _exc)
+
+    if _campaign_pre is None:
+        logger.info(
+            "[%s] Campagna '%s' non configurata in DB — analisi saltata. "
+            "Configurare la campagna nell'admin prima di ri-analizzare.",
+            appointment_id, campaign_info["raw"],
+        )
+        return  # Silent skip — no processing record created
+
+    # ── Crea subito il record con status=processing (visibile nella UI) ───────
+    analysis_id = await _create_processing_record(appointment_id, acuity_account)
+
+    # ── 1. Campaign code already parsed above — update progress ──────────────
+    await _update_progress(analysis_id, 5, "Verifica codice campagna...")
 
     logger.info(
         "[%s] Campaign: %s | operator: %s",
@@ -282,11 +299,15 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
 
     # ── 4. Load campaign config + global documents ────────────────────────────
     await _update_progress(analysis_id, 60, "Caricamento configurazione campagna...")
-    campaign_db = None
+    # Reuse _campaign_pre fetched in pre-flight (already confirmed not None)
+    campaign_db = _campaign_pre
     try:
-        campaign_db = await get_campaign_by_code(campaign_info["raw"])
+        # Refresh in case the config changed since the pre-flight check
+        _refreshed = await get_campaign_by_code(campaign_info["raw"])
+        if _refreshed is not None:
+            campaign_db = _refreshed
     except Exception as exc:
-        logger.warning("[%s] Could not fetch campaign config: %s", appointment_id, exc)
+        logger.warning("[%s] Could not refresh campaign config: %s — using pre-flight data", appointment_id, exc)
 
     campaign_script = campaign_db.script             if campaign_db else None
     campaign_client = campaign_db.client_info        if campaign_db else None
