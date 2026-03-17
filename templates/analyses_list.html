@@ -36,7 +36,7 @@
       </thead>
       <tbody>
         {% for a in analyses %}
-        <tr>
+        <tr data-analysis-id="{{ a.id }}">
           <td class="text-muted small">{{ a.id }}</td>
           <td><code class="small">{{ a.campaign_code or "—" }}</code></td>
           <td>{{ a.operator_name or "<span class='text-muted'>—</span>" | safe }}</td>
@@ -71,16 +71,18 @@
               <span class="dot-miss" title="Email non inviata">●</span>
             {% endif %}
           </td>
-          <td class="text-center" style="min-width:140px;">
+          <td class="text-center" style="width:150px;min-width:150px;max-width:150px;"
+              data-status-cell>
             {% if a.processing_status == 'completed' %}
               <span class="badge bg-success">ok</span>
             {% elif a.processing_status == 'error' %}
               <span class="badge bg-danger" title="{{ a.error_message or '' }}">errore</span>
             {% elif a.processing_status == 'processing' %}
-              <div style="font-size:10px; color:#666; margin-bottom:2px;">
+              <div style="font-size:10px;color:#666;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                   title="{{ a.step_message or 'In corso...' }} {{ a.progress or 0 }}%">
                 {{ a.step_message or 'In corso...' }} {{ a.progress or 0 }}%
               </div>
-              <div class="progress" style="height:6px;">
+              <div class="progress" style="height:5px;">
                 <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning"
                      style="width:{{ a.progress or 0 }}%"></div>
               </div>
@@ -117,4 +119,52 @@
 </div>
 {% endif %}
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var _timer = null;
+
+  function updateCell(cell, item) {
+    var key = item.status + ':' + item.progress;
+    if (cell.dataset.pollKey === key) return;
+    cell.dataset.pollKey = key;
+    if (item.status === 'processing' || item.status === 'pending') {
+      cell.innerHTML =
+        '<div style="font-size:10px;color:#666;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ' +
+        'title="' + (item.step_message || 'In corso...') + ' ' + item.progress + '%">' +
+        (item.step_message || 'In corso...') + ' ' + item.progress + '%</div>' +
+        '<div class="progress" style="height:5px;">' +
+        '<div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" ' +
+        'style="width:' + item.progress + '%"></div></div>';
+    } else if (item.status === 'completed') {
+      cell.innerHTML = '<span class="badge bg-success">ok</span>';
+    } else if (item.status === 'error') {
+      cell.innerHTML = '<span class="badge bg-danger">errore</span>';
+    }
+  }
+
+  function poll() {
+    fetch('/admin/ui/appointments/status-poll', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        data.items.forEach(function (item) {
+          var row = document.querySelector('tr[data-analysis-id="' + item.analysis_id + '"]');
+          if (!row) return;
+          var cell = row.querySelector('td[data-status-cell]');
+          if (cell) updateCell(cell, item);
+        });
+        if (data.has_processing) {
+          _timer = setTimeout(poll, 3000);
+        }
+      })
+      .catch(function () { _timer = setTimeout(poll, 8000); });
+  }
+
+  if (document.querySelector('div.progress-bar')) {
+    _timer = setTimeout(poll, 3000);
+  }
+})();
+</script>
 {% endblock %}
