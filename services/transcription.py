@@ -78,9 +78,13 @@ async def transcribe_audio(
 
             # Run synchronous Whisper in a thread pool to avoid blocking the event loop
             loop = asyncio.get_event_loop()
-            transcript = await loop.run_in_executor(
-                None, _transcribe_sync, tmp_path
-            )
+            try:
+                transcript = await asyncio.wait_for(
+                    loop.run_in_executor(None, _transcribe_sync, tmp_path),
+                    timeout=600,  # 10 minuti massimo per file
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError("Trascrizione interrotta: timeout di 10 minuti superato.")
 
             logger.info("Transcription complete (%d chars).", len(transcript))
             return transcript
