@@ -297,6 +297,42 @@ async def campaign_edit_submit(
     return RedirectResponse(url=f"/admin/ui/campaigns?ok={msg}", status_code=303)
 
 
+# ── Test email ────────────────────────────────────────────────────────────────
+
+@router.get("/test-email", response_class=JSONResponse)
+async def test_email(request: Request):
+    if not _is_admin(request):
+        return JSONResponse({"error": "non autorizzato"}, status_code=403)
+
+    from config import settings as cfg
+    from services.email_service import send_analysis_report
+
+    to_addr = request.query_params.get("to", cfg.fallback_email)
+    try:
+        await send_analysis_report(
+            recipients=[to_addr],
+            html_content="<h1>Test CallCoach AI</h1><p>Email di test inviata correttamente.</p>",
+            operator_name="Test",
+            qualification_level="buona",
+            appointment_datetime="2026-01-01",
+        )
+        return JSONResponse({
+            "ok": True,
+            "to": to_addr,
+            "smtp_host": cfg.smtp_host,
+            "smtp_port": cfg.smtp_port,
+            "resend_key_set": bool(cfg.resend_api_key),
+        })
+    except Exception as exc:
+        return JSONResponse({
+            "ok": False,
+            "error": str(exc),
+            "smtp_host": cfg.smtp_host,
+            "smtp_port": cfg.smtp_port,
+            "resend_key_set": bool(cfg.resend_api_key),
+        }, status_code=500)
+
+
 # ── Debug: raw DB + Acuity data (remove after diagnosis) ─────────────────────
 
 @router.get("/debug")
