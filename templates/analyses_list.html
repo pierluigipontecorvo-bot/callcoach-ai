@@ -117,7 +117,4 @@
 </div>
 {% endif %}
 
-{% if analyses and analyses | selectattr("processing_status", "equalto", "processing") | list %}
-<script>setTimeout(() => window.location.reload(), 4000);</script>
-{% endif %}
 {% endblock %}

@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 _whisper_model = None
 _transcription_lock = asyncio.Lock()
 
-# Telemarketing calls are 2-10 min; cap at 8 min to keep Whisper fast on CPU
-MAX_AUDIO_MINUTES = 8
+# Cap at 3 min per recording — Whisper small on CPU takes ~10x realtime,
+# so 3 min audio ≈ 30s transcription. Longer recordings hang the pipeline.
+MAX_AUDIO_MINUTES = 3
 
 
 def get_whisper_model():
