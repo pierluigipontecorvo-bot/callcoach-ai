@@ -175,9 +175,11 @@
   /* ── Lightweight status poll — updates ONLY Analisi cells, zero table flicker ── */
   function renderStatusCell(item) {
     if (item.status === 'processing' || item.status === 'pending') {
-      return '<div style="font-size:10px;color:#888;">' +
+      return '<div style="font-size:10px;color:#888;white-space:nowrap;overflow:hidden;' +
+        'text-overflow:ellipsis;max-width:150px;" title="' +
+        (item.step_message || 'In corso...') + ' ' + item.progress + '%">' +
         (item.step_message || 'In corso...') + ' ' + item.progress + '%</div>' +
-        '<div class="progress" style="height:5px;margin-top:2px;">' +
+        '<div class="progress" style="height:5px;margin-top:2px;width:150px;">' +
         '<div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" ' +
         'style="width:' + item.progress + '%"></div></div>';
     }
