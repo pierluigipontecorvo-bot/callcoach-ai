@@ -1,0 +1,224 @@
+{# Fragment v2 — qualifica badge + colonna email, nessun reload pagina #}
+<div id="appt-data"
+     data-auto-reload="{{ 'true' if has_processing else 'false' }}"
+     data-subtitle="Ultimi 30 giorni + tutti i futuri — {{ appointments | length }} appuntamenti">
+
+{% if appointments %}
+
+{# ── Filter bar ──────────────────────────────────────────────────────────── #}
+<div class="mb-3 d-flex flex-wrap align-items-center gap-2" id="appt-filters">
+  <div class="btn-group btn-group-sm" role="group" id="grp-filter">
+    <input type="radio" class="btn-check" name="grp" id="grp-all"  value="all"       autocomplete="off" checked>
+    <label class="btn btn-outline-secondary" for="grp-all">Tutti</label>
+
+    <input type="radio" class="btn-check" name="grp" id="grp-tod"  value="today"     autocomplete="off">
+    <label class="btn btn-outline-secondary" for="grp-tod">
+      Presi oggi
+      {% set _nt = appointments | selectattr('date_group','equalto','today') | list | length %}
+      {% if _nt %}<span class="badge bg-primary ms-1" style="font-size:9px;">{{ _nt }}</span>{% endif %}
+    </label>
+
+    <input type="radio" class="btn-check" name="grp" id="grp-yes"  value="yesterday" autocomplete="off">
+    <label class="btn btn-outline-secondary" for="grp-yes">
+      Presi ieri
+      {% set _ny = appointments | selectattr('date_group','equalto','yesterday') | list | length %}
+      {% if _ny %}<span class="badge bg-secondary ms-1" style="font-size:9px;">{{ _ny }}</span>{% endif %}
+    </label>
+
+    <input type="radio" class="btn-check" name="grp" id="grp-past" value="past"      autocomplete="off">
+    <label class="btn btn-outline-secondary" for="grp-past">
+      Precedenti
+      {% set _np = appointments | selectattr('date_group','equalto','past') | list | length %}
+      {% if _np %}<span class="badge bg-secondary ms-1" style="font-size:9px;">{{ _np }}</span>{% endif %}
+    </label>
+  </div>
+
+  {% if unique_operators %}
+  <select id="op-filter" class="form-select form-select-sm" style="max-width:180px;">
+    <option value="">Tutti gli operatori</option>
+    {% for op in unique_operators %}
+    <option value="{{ op }}">{{ op }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  {% if unique_campaigns %}
+  <select id="camp-filter" class="form-select form-select-sm" style="max-width:220px;">
+    <option value="">Tutte le campagne</option>
+    {% for c in unique_campaigns %}
+    <option value="{{ c }}">{{ c }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  <span id="appt-count-label" class="text-muted small ms-auto"></span>
+</div>
+
+{# ── Mappa colori qualifica ── #}
+{% set _QL = {
+  'eccellente':    {'bg': '#1565c0', 'label': '⭐ Eccellente'},
+  'buona':         {'bg': '#27ae60', 'label': '✅ Buona'},
+  'sufficiente':   {'bg': '#2e7d32', 'label': '✅ Sufficiente'},
+  'da_migliorare': {'bg': '#e67e22', 'label': '⚠ Da migliorare'},
+  'inaccurata':    {'bg': '#c0392b', 'label': '❌ Inaccurata'},
+  'non_in_target': {'bg': '#c0392b', 'label': '⛔ Non in target'},
+  'errore_tecnico':{'bg': '#e65100', 'label': '⚠ Errore tecnico'},
+} %}
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table id="apptTable" class="table table-hover mb-0 align-middle" style="font-size:13px;">
+      <thead>
+        <tr>
+          <th class="sortable" data-col="0" data-type="text">Campagna<span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="1" data-type="text">Ragione Sociale<span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="2" data-type="text">Operatore<span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="3" data-type="text">Etichetta<span class="sort-icon">⇅</span></th>
+          <th title="Script · Parametri qualif. · Info cliente">Config <span class="text-muted fw-normal" style="font-size:10px;">S·Q·I</span></th>
+          <th class="sortable" data-col="5" data-type="date">Data Appuntamento<span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="6" data-type="date">Preso il<span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="7" data-type="text">Qualifica<span class="sort-icon">⇅</span></th>
+          <th>Email</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in appointments %}
+        {% set _has_analysis = a.analysis is not none %}
+        {% set _completed = _has_analysis and a.analysis.status == 'completed' %}
+        {% set _ql = a.analysis.qualification_level if _has_analysis else '' %}
+        {% set _can_email = _completed and _ql not in ('non_in_target', 'errore_tecnico', '') %}
+        <tr data-appt-id="{{ a.id }}"
+            data-group="{{ a.date_group }}"
+            data-op="{{ a.op_display }}"
+            data-campaign="{{ a.campaign_code }}">
+
+          {# Campagna #}
+          <td data-val="{{ a.campaign_code }}">
+            <code style="font-size:12px;">{{ a.campaign_code }}</code>
+            {% if not a.campaign_cfg %}
+              {% if a.campaign_inactive %}
+                <span class="ms-1 text-secondary" title="Configurazione inattiva">⊘</span>
+              {% else %}
+                <span class="ms-1 text-warning" title="Nessuna configurazione trovata">⚠</span>
+              {% endif %}
+            {% endif %}
+          </td>
+
+          {# Ragione Sociale #}
+          <td data-val="{{ a.ragione }}"
+              style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+              title="{{ a.ragione }}">{{ a.ragione }}</td>
+
+          {# Operatore #}
+          <td data-val="{{ a.op_display }}" style="white-space:nowrap;">
+            <span style="font-family:'Space Grotesk',sans-serif;font-weight:600;">{{ a.op_display }}</span>
+          </td>
+
+          {# Etichetta #}
+          {% set _LC = {
+            'ANNULLATO':  {'bg': '#f06292', 'fg': '#fff'},
+            'APP.TO KO':  {'bg': '#c62828', 'fg': '#fff'},
+            'APP.TO OK':  {'bg': '#2e7d32', 'fg': '#fff'},
+            'CONFERMATO': {'bg': '#42a5f5', 'fg': '#fff'},
+            'PRESO':      {'bg': '#f9a825', 'fg': '#333'},
+          } %}
+          <td data-val="{{ a.labels[0].name if a.labels else '' }}">
+            {% for lbl in a.labels %}
+              {% set _key = lbl.name | upper %}
+              {% set _style = _LC[_key] if _key in _LC else {'bg': '#6c757d', 'fg': '#fff'} %}
+              <span class="badge me-1" style="font-size:10px;background-color:{{ _style.bg }};color:{{ _style.fg }};">
+                {{ lbl.name }}
+              </span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endfor %}
+          </td>
+
+          {# Config S·Q·I #}
+          <td class="text-center" style="letter-spacing:2px;">
+            <span title="Script">{% if a.campaign_cfg and a.campaign_cfg.script %}<span class="dot-ok">●</span>{% else %}<span class="dot-miss">●</span>{% endif %}</span>
+            <span title="Qualificazione">{% if a.campaign_cfg and a.campaign_cfg.qualification_params %}<span class="dot-ok">●</span>{% else %}<span class="dot-miss">●</span>{% endif %}</span>
+            <span title="Info cliente">{% if a.campaign_cfg and a.campaign_cfg.client_info %}<span class="dot-ok">●</span>{% else %}<span class="dot-miss">●</span>{% endif %}</span>
+          </td>
+
+          {# Data Appuntamento #}
+          <td data-val="{{ a.dt_display }}" style="white-space:nowrap;font-variant-numeric:tabular-nums;">{{ a.dt_display }}</td>
+
+          {# Preso il #}
+          <td data-val="{{ a.created_display }}" style="white-space:nowrap;font-variant-numeric:tabular-nums;color:#708090;font-size:12px;">{{ a.created_display }}</td>
+
+          {# Qualifica — data-poll-cell #}
+          <td style="width:150px;min-width:150px;max-width:150px;"
+              data-poll-cell
+              data-val="{{ _ql }}">
+            {% if _has_analysis %}
+              {% if a.analysis.status == 'processing' %}
+                <div style="font-size:10px;color:#888;">{{ a.analysis.step_message or 'In corso...' }} {{ a.analysis.progress }}%</div>
+                <div class="progress" style="height:5px;margin-top:2px;">
+                  <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" style="width:{{ a.analysis.progress }}%"></div>
+                </div>
+              {% elif _completed %}
+                {% set _qcfg = _QL.get(_ql, {'bg': '#6c757d', 'label': '✓ Completata'}) %}
+                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
+                   class="badge text-decoration-none"
+                   style="font-size:11px;background:{{ _qcfg.bg }};">{{ _qcfg.label }}</a>
+              {% elif a.analysis.status == 'error' %}
+                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
+                   class="badge bg-danger text-decoration-none" style="font-size:11px;">✗ Errore</a>
+              {% else %}
+                <span class="badge bg-secondary" style="font-size:11px;">⏳ {{ a.analysis.status }}</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted" style="font-size:11px;">—</span>
+            {% endif %}
+          </td>
+
+          {# Email — data-email-cell #}
+          <td style="white-space:nowrap;min-width:130px;" data-email-cell>
+            {% if _can_email %}
+            <button class="btn btn-sm btn-outline-primary"
+                    style="padding:2px 6px;font-size:11px;"
+                    title="Invia all'operatore"
+                    onclick="sendEmail({{ a.analysis.id }}, 'operator', this)">✉ Op</button>
+            <button class="btn btn-sm btn-outline-secondary ms-1"
+                    style="padding:2px 6px;font-size:11px;"
+                    title="Invia a inoltro@effoncall.com"
+                    onclick="sendEmail({{ a.analysis.id }}, 'inoltro', this)">✉ Inoltro</button>
+            {% endif %}
+          </td>
+
+          {# Azioni #}
+          <td>
+            {% set _is_done = _has_analysis and a.analysis.status == 'completed' %}
+            <button class="btn btn-dark btn-sm" style="font-size:11px;padding:3px 10px;"
+                    onclick="triggerAnalyze(this, '{{ a.account }}', '{{ a.id }}', {{ 'true' if _is_done else 'false' }})">
+              {% if _is_done %}↺ Ri-analizza{% else %}▶ Analizza{% endif %}
+            </button>
+          </td>
+
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="text-muted small mt-2">
+  <span class="dot-ok">●</span> presente &nbsp;
+  <span class="dot-miss">●</span> assente &nbsp;·&nbsp;
+  S = Script &nbsp; Q = Qualificazione &nbsp; I = Info cliente
+  &nbsp;·&nbsp; Clicca su una colonna per ordinare.
+</p>
+
+{% else %}
+<div class="card shadow-sm text-center py-5">
+  <div style="font-size:2rem;">📅</div>
+  <p class="text-muted mt-2 mb-0">
+    Nessun appuntamento trovato negli ultimi 30 giorni.<br>
+    <small>Verifica che le credenziali Acuity siano configurate.</small>
+  </p>
+</div>
+{% endif %}
+
+</div>{# /appt-data #}

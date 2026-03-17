@@ -877,6 +877,18 @@ async def analysis_print(
     return HTMLResponse(content=html)
 
 
+# ── Appointments v2 shell ─────────────────────────────────────────────────────
+
+@router.get("/appointments2", response_class=HTMLResponse)
+async def appointments2_list(request: Request):
+    if not _is_admin(request):
+        return _login_redirect()
+    return templates.TemplateResponse(
+        "appointments_v2.html",
+        {"request": request, "active_page": "appointments2"},
+    )
+
+
 # ── Appointments list (instant shell — no Acuity calls) ──────────────────────
 
 @router.get("/appointments", response_class=HTMLResponse)
@@ -1113,8 +1125,13 @@ async def appointments_data(
         if e["campaign_code"] and e["campaign_code"] not in ("—", "")
     })
 
+    _tmpl = (
+        "appointments_v2_fragment.html"
+        if request.query_params.get("v") == "2"
+        else "appointments_table_fragment.html"
+    )
     return templates.TemplateResponse(
-        "appointments_table_fragment.html",
+        _tmpl,
         {
             "request": request,
             "appointments": enriched,

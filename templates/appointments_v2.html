@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% set active_page = "appointments2" %}
+
+{% block title %}Appuntamenti v2 — CallCoach Admin{% endblock %}
+
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Appuntamenti <span style="color:#f9a825;font-size:14px;">v2</span></h4>
+    <p class="text-muted small mb-0" id="appt-subtitle">&nbsp;</p>
+  </div>
+  <button id="appt-refresh" onclick="loadAppts(true)"
+          class="btn btn-sm btn-outline-secondary" style="display:none;font-size:12px;">
+    ↺ Aggiorna
+  </button>
+</div>
+
+<div id="appt-container">
+  <div class="text-center py-5 text-muted">
+    <div class="spinner-border" role="status"
+         style="width:1.5rem;height:1.5rem;border-width:2px;color:var(--ec-slate);"></div>
+    <p class="mt-2 small mb-0">Caricamento appuntamenti Acuity…</p>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  th.sortable:hover { color:var(--ec-navy); }
+  th.sortable .sort-icon { display:inline-block; width:12px; font-size:9px; opacity:.35; margin-left:3px; vertical-align:middle; }
+  th.sortable.asc .sort-icon, th.sortable.desc .sort-icon { opacity:1; }
+</style>
+
+<script>
+(function () {
+  var _LS_COL  = 'appt2_sort_col';
+  var _LS_DIR  = 'appt2_sort_dir';
+  var _lastCol = -1;
+  var _ascending = true;
+  var _reloadTimer = null;
+
+  /* ── Mappa qualifica → badge HTML ── */
+  var _QL = {
+    'eccellente':    {bg:'#1565c0', label:'⭐ Eccellente'},
+    'buona':         {bg:'#27ae60', label:'✅ Buona'},
+    'sufficiente':   {bg:'#2e7d32', label:'✅ Sufficiente'},
+    'da_migliorare': {bg:'#e67e22', label:'⚠ Da migliorare'},
+    'inaccurata':    {bg:'#c0392b', label:'❌ Inaccurata'},
+    'non_in_target': {bg:'#c0392b', label:'⛔ Non in target'},
+    'errore_tecnico':{bg:'#e65100', label:'⚠ Errore tecnico'},
+  };
+
+  function qualBadgeHtml(ql, analysisId) {
+    var cfg = _QL[ql] || {bg:'#6c757d', label:'✓ Completata'};
+    return '<a href="/admin/ui/analyses/' + analysisId + '" class="badge text-decoration-none" ' +
+           'style="font-size:11px;background:' + cfg.bg + ';">' + cfg.label + '</a>';
+  }
+
+  var _NO_EMAIL = ['non_in_target','errore_tecnico',''];
+  function emailButtonsHtml(analysisId) {
+    return '<button class="btn btn-sm btn-outline-primary" style="padding:2px 6px;font-size:11px;" ' +
+           'onclick="sendEmail(' + analysisId + ',\'operator\',this)" title="Invia all\'operatore">✉ Op</button>' +
+           '<button class="btn btn-sm btn-outline-secondary ms-1" style="padding:2px 6px;font-size:11px;" ' +
+           'onclick="sendEmail(' + analysisId + ',\'inoltro\',this)" title="Invia a inoltro@effoncall.com">✉ Inoltro</button>';
+  }
+
+  /* ── Invio email ── */
+  window.sendEmail = function(analysisId, mode, btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳';
+    fetch('/admin/ui/analyses/' + analysisId + '/send-email?mode=' + mode, {method:'POST', credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if (data.ok) {
+          btn.textContent = '✓';
+          btn.classList.remove('btn-outline-primary','btn-outline-secondary');
+          btn.classList.add('btn-success');
+          var dest = data.recipients ? data.recipients.join('\n') : '—';
+          alert('✅ Email inviata a:\n\n' + dest);
+        } else {
+          btn.textContent = '✗';
+          btn.classList.add('btn-danger');
+          alert('Errore: ' + (data.error || 'sconosciuto'));
+          btn.disabled = false;
+        }
+      })
+      .catch(function(){ btn.textContent='✗'; btn.disabled=false; });
+  };
+
+  /* ── Date parser ── */
+  function parseDate(str) {
+    if (!str || str === '—') return 0;
+    var m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+    if (m) return new Date(+m[3],+m[2]-1,+m[1],+m[4],+m[5]).getTime();
+    var m2 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+    if (m2) return new Date(2000 + +m2[3],+m2[2]-1,+m2[1]).getTime();
+    return 0;
+  }
+
+  /* ── Sort ── */
+  function applySort(col, ascending) {
+    var table = document.getElementById('apptTable');
+    if (!table) return;
+    var tbody = table.querySelector('tbody');
+    var rows  = Array.from(tbody.querySelectorAll('tr'));
+    var th    = table.querySelector('th.sortable[data-col="' + col + '"]');
+    if (!th) return;
+    var type  = th.dataset.type || 'text';
+    _lastCol = col; _ascending = ascending;
+    table.querySelectorAll('th.sortable').forEach(function(h){
+      h.classList.remove('asc','desc');
+      h.querySelector('.sort-icon').textContent='⇅';
+    });
+    th.classList.add(ascending?'asc':'desc');
+    th.querySelector('.sort-icon').textContent = ascending?'▲':'▼';
+    rows.sort(function(rowA,rowB){
+      var cellA=rowA.cells[col], cellB=rowB.cells[col];
+      var valA=(cellA&&cellA.dataset.val!==undefined?cellA.dataset.val:(cellA?cellA.textContent:'')).trim();
+      var valB=(cellB&&cellB.dataset.val!==undefined?cellB.dataset.val:(cellB?cellB.textContent:'')).trim();
+      var cmp=(type==='date')?parseDate(valA)-parseDate(valB):valA.localeCompare(valB,'it',{sensitivity:'base'});
+      return ascending?cmp:-cmp;
+    });
+    rows.forEach(function(r){tbody.appendChild(r);});
+  }
+
+  function initSort() {
+    document.querySelectorAll('#apptTable th.sortable').forEach(function(th){
+      th.addEventListener('click',function(){
+        var col=parseInt(th.dataset.col,10);
+        var asc=(_lastCol===col)?!_ascending:true;
+        applySort(col,asc);
+        try{localStorage.setItem(_LS_COL,col);localStorage.setItem(_LS_DIR,asc?'asc':'desc');}catch(e){}
+      });
+    });
+    try{
+      var sc=localStorage.getItem(_LS_COL);
+      var sd=localStorage.getItem(_LS_DIR);
+      if(sc!==null)applySort(parseInt(sc,10),sd!=='desc');
+    }catch(e){}
+  }
+
+  /* ── Filtri ── */
+  function initFilters() {
+    function applyFilters() {
+      var grpVal=(document.querySelector('input[name="grp"]:checked')||{}).value||'all';
+      var opVal=(document.getElementById('op-filter')||{}).value||'';
+      var campVal=(document.getElementById('camp-filter')||{}).value||'';
+      var rows=document.querySelectorAll('#apptTable tbody tr');
+      var visible=0;
+      rows.forEach(function(row){
+        var show=(grpVal==='all'||row.dataset.group===grpVal)
+               &&(opVal===''||row.dataset.op===opVal)
+               &&(campVal===''||row.dataset.campaign===campVal);
+        row.style.display=show?'':'none';
+        if(show)visible++;
+      });
+      var lbl=document.getElementById('appt-count-label');
+      if(lbl)lbl.textContent=visible+' appuntamenti';
+    }
+    document.querySelectorAll('input[name="grp"]').forEach(function(el){el.addEventListener('change',applyFilters);});
+    var os=document.getElementById('op-filter'); if(os)os.addEventListener('change',applyFilters);
+    var cs=document.getElementById('camp-filter'); if(cs)cs.addEventListener('change',applyFilters);
+    var tr=document.getElementById('grp-tod'),yr=document.getElementById('grp-yes');
+    if(tr){
+      var ht=document.querySelectorAll('#apptTable tbody tr[data-group="today"]').length>0;
+      var hy=document.querySelectorAll('#apptTable tbody tr[data-group="yesterday"]').length>0;
+      if(ht)tr.checked=true; else if(hy&&yr)yr.checked=true;
+    }
+    applyFilters();
+  }
+
+  /* ── Spinner ── */
+  function spinnerHtml(){
+    return '<div class="text-center py-5 text-muted"><div class="spinner-border" role="status" '+
+      'style="width:1.5rem;height:1.5rem;border-width:2px;color:var(--ec-slate);"></div>'+
+      '<p class="mt-2 small mb-0">Caricamento appuntamenti Acuity\u2026</p></div>';
+  }
+
+  /* ── Main loader ── */
+  window.loadAppts = function(forceRefresh, silent){
+    if(_reloadTimer){clearTimeout(_reloadTimer);_reloadTimer=null;}
+    document.getElementById('appt-refresh').style.display='none';
+    if(!silent)document.getElementById('appt-container').innerHTML=spinnerHtml();
+    var url='/admin/ui/appointments/data?v=2'+(forceRefresh?'&refresh=1':'');
+    fetch(url,{credentials:'same-origin'})
+      .then(function(r){
+        if(r.status===401){window.location='/admin/ui/login';return null;}
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        return r.text();
+      })
+      .then(function(html){
+        if(html===null)return;
+        var container=document.getElementById('appt-container');
+        var scrollY=silent?window.scrollY:0;
+        container.innerHTML=html;
+        if(silent&&scrollY)window.scrollTo(0,scrollY);
+        var wrapper=document.getElementById('appt-data');
+        if(wrapper){
+          var sub=wrapper.getAttribute('data-subtitle');
+          if(sub)document.getElementById('appt-subtitle').textContent=sub;
+          if(wrapper.getAttribute('data-auto-reload')==='true')
+            _reloadTimer=setTimeout(pollStatuses,3000);
+        }
+        initSort();
+        initFilters();
+        document.getElementById('appt-refresh').style.display='';
+      })
+      .catch(function(err){
+        if(!silent)document.getElementById('appt-container').innerHTML=
+          '<div class="alert alert-danger">Errore caricamento ('+err+'). '+
+          '<a href="#" onclick="loadAppts(true);return false;">Riprova</a></div>';
+        document.getElementById('appt-refresh').style.display='';
+      });
+  };
+
+  /* ── Poll celle qualifica + email ── */
+  function pollStatuses(){
+    if(_reloadTimer){clearTimeout(_reloadTimer);_reloadTimer=null;}
+    fetch('/admin/ui/appointments/status-poll',{credentials:'same-origin'})
+      .then(function(r){return r.json();})
+      .then(function(data){
+        data.items.forEach(function(item){
+          var row=document.querySelector('tr[data-appt-id="'+item.appt_id+'"]');
+          if(!row)return;
+
+          /* ── Qualifica cell ── */
+          var qCell=row.querySelector('td[data-poll-cell]');
+          if(qCell){
+            var key=item.status+':'+item.progress;
+            if(qCell.dataset.pollKey!==key){
+              var html=null;
+              if(item.status==='processing'||item.status==='pending'){
+                html='<div style="font-size:10px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;" '+
+                  'title="'+(item.step_message||'In corso...')+' '+item.progress+'%">'+
+                  (item.step_message||'In corso...')+' '+item.progress+'%</div>'+
+                  '<div class="progress" style="height:5px;margin-top:2px;">'+
+                  '<div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" '+
+                  'style="width:'+item.progress+'%"></div></div>';
+              } else if(item.status==='completed'){
+                html=qualBadgeHtml(item.qualification_level, item.analysis_id);
+              } else if(item.status==='error'){
+                html='<a href="/admin/ui/analyses/'+item.analysis_id+'" '+
+                  'class="badge bg-danger text-decoration-none" style="font-size:11px;">\u2717 Errore</a>';
+              }
+              if(html){qCell.innerHTML=html;qCell.dataset.pollKey=key;}
+            }
+          }
+
+          /* ── Email cell: aggiorna quando analisi appena completata ── */
+          if(item.status==='completed'){
+            var eCell=row.querySelector('td[data-email-cell]');
+            if(eCell&&eCell.innerHTML.trim()===''){
+              var noEmail=_NO_EMAIL.indexOf(item.qualification_level)>=0;
+              if(!noEmail)eCell.innerHTML=emailButtonsHtml(item.analysis_id);
+            }
+          }
+        });
+        if(data.has_processing)_reloadTimer=setTimeout(pollStatuses,3000);
+      })
+      .catch(function(){_reloadTimer=setTimeout(pollStatuses,10000);});
+  }
+
+  /* ── Analizza ── */
+  window.triggerAnalyze = function(btn, account, apptId, isRianalizza){
+    if(isRianalizza&&!confirm('Già analizzato. Eseguire di nuovo?'))return;
+    btn.disabled=true; btn.textContent='…';
+    fetch('/admin/ui/appointments/'+account+'/'+apptId+'/analyze',{
+      method:'POST',credentials:'same-origin',headers:{'accept':'application/json'},
+    })
+      .then(function(r){return r.json();})
+      .then(function(data){
+        if(data.ok){
+          var row=btn.closest('tr');
+          if(row){
+            var cell=row.querySelector('td[data-poll-cell]');
+            if(cell){
+              cell.innerHTML='<div style="font-size:10px;color:#888;">Avvio... 0%</div>'+
+                '<div class="progress" style="height:5px;margin-top:2px;">'+
+                '<div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" style="width:5%"></div></div>';
+              cell.dataset.pollKey='';
+            }
+            /* azzera email cell in attesa del risultato */
+            var ec=row.querySelector('td[data-email-cell]');
+            if(ec)ec.innerHTML='';
+          }
+          btn.textContent='…'; btn.disabled=true;
+          if(!_reloadTimer)_reloadTimer=setTimeout(pollStatuses,2000);
+        } else {
+          alert(data.error||'Errore avvio analisi.');
+          btn.disabled=false;
+          btn.textContent=isRianalizza?'↺ Ri-analizza':'▶ Analizza';
+        }
+      })
+      .catch(function(){
+        alert('Errore di rete. Riprova.');
+        btn.disabled=false;
+        btn.textContent=isRianalizza?'↺ Ri-analizza':'▶ Analizza';
+      });
+  };
+
+  document.addEventListener('DOMContentLoaded',function(){window.loadAppts(false);});
+})();
+</script>
+{% endblock %}
