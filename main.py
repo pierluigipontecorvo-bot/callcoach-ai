@@ -15,14 +15,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ────────────────────────────────────────────────────────────
-    logger.info("CallCoach AI starting — loading Whisper model …")
-    try:
-        from services.transcription import get_whisper_model
-        get_whisper_model()
-        logger.info("Whisper model loaded. Server ready.")
-    except Exception as exc:
-        # Don't crash on startup if Whisper isn't installed yet (e.g. local dev)
-        logger.warning("Whisper model not loaded at startup: %s", exc)
+    logger.info("CallCoach AI starting — trascrizione via OpenAI Whisper API.")
 
     # ── Startup DB migrations — each with hard timeout ──────────────────────
     import asyncio as _asyncio

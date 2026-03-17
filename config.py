@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Resend transactional email (preferred — bypasses Railway SMTP block)
     resend_api_key: str = ""
 
+    # OpenAI — Whisper API per trascrizione cloud (sostituisce Whisper locale)
+    openai_api_key: str = ""
+
     # Security
     secret_key: str
     admin_password: str
