@@ -34,6 +34,11 @@
     <div style="font-size:13px; color:#7f5200; margin-top:3px; line-height:1.5;">
       La trascrizione audio non era leggibile. Il report generato non è attendibile e non deve essere considerato ai fini della valutazione dell'operatore.
     </div>
+    {% if analysis.error_message %}
+    <div style="font-size:12px; color:#b71c1c; margin-top:6px; font-family:monospace; background:#fff3e0; padding:4px 8px; border-radius:4px;">
+      {{ analysis.error_message }}
+    </div>
+    {% endif %}
   </div>
 </div>
 
