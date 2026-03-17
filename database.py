@@ -15,11 +15,6 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
-    pool_timeout=5,          # fail fast if pool exhausted (don't hang startup)
-    connect_args={
-        "timeout": 10,       # asyncpg socket connect timeout (seconds)
-        "command_timeout": 15,
-    },
 )
 
 AsyncSessionLocal = async_sessionmaker(
