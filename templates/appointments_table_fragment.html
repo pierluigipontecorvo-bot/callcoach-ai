@@ -168,19 +168,12 @@
 
           {# Azione #}
           <td>
-            <form method="post"
-                  action="/admin/ui/appointments/{{ a.account }}/{{ a.id }}/analyze"
-                  style="display:inline;">
-              <button type="submit"
-                      class="btn btn-dark btn-sm"
-                      style="font-size:11px; padding:3px 10px;"
-                      {% if a.analysis and a.analysis.status == 'completed' %}
-                      onclick="return confirm('Già analizzato. Eseguire di nuovo?')"
-                      {% endif %}>
-                {% if a.analysis and a.analysis.status == 'completed' %}↺ Ri-analizza
-                {% else %}▶ Analizza{% endif %}
-              </button>
-            </form>
+            {% set _is_done = a.analysis and a.analysis.status == 'completed' %}
+            <button class="btn btn-dark btn-sm"
+                    style="font-size:11px; padding:3px 10px;"
+                    onclick="triggerAnalyze(this, '{{ a.account }}', '{{ a.id }}', {{ 'true' if _is_done else 'false' }})">
+              {% if _is_done %}↺ Ri-analizza{% else %}▶ Analizza{% endif %}
+            </button>
           </td>
 
         </tr>

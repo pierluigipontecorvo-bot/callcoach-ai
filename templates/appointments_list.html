@@ -224,6 +224,47 @@
       });
   }
 
+  /* ── AJAX Analizza — nessun reload di pagina ── */
+  window.triggerAnalyze = function (btn, account, apptId, isRianalizza) {
+    if (isRianalizza && !confirm('Già analizzato. Eseguire di nuovo?')) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    fetch('/admin/ui/appointments/' + account + '/' + apptId + '/analyze', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'accept': 'application/json' },
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          /* aggiorna cella Analisi con progress bar e avvia poll */
+          var row = btn.closest('tr');
+          if (row) {
+            var cell = row.querySelector('td[data-poll-cell]');
+            if (cell) {
+              cell.innerHTML = '<div style="font-size:10px;color:#888;">Avvio pipeline... 0%</div>' +
+                '<div class="progress" style="height:5px;margin-top:2px;">' +
+                '<div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" style="width:5%"></div></div>';
+              cell.dataset.pollKey = '';
+            }
+          }
+          btn.textContent = '…';
+          btn.disabled = true;
+          /* avvia poll se non già in corso */
+          if (!_reloadTimer) { _reloadTimer = setTimeout(pollStatuses, 2000); }
+        } else {
+          alert(data.error || 'Errore avvio analisi.');
+          btn.disabled = false;
+          btn.textContent = isRianalizza ? '↺ Ri-analizza' : '▶ Analizza';
+        }
+      })
+      .catch(function () {
+        alert('Errore di rete. Riprova.');
+        btn.disabled = false;
+        btn.textContent = isRianalizza ? '↺ Ri-analizza' : '▶ Analizza';
+      });
+  };
+
   document.addEventListener('DOMContentLoaded', function () { window.loadAppts(false); });
 })();
 </script>

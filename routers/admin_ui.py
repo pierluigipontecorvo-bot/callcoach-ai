@@ -963,6 +963,10 @@ async def trigger_appointment_analysis(
     background_tasks: BackgroundTasks,
 ):
     if not _is_admin(request):
+        # AJAX call: return 401 JSON; form POST fallback: redirect
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            return JSONResponse({"error": "Non autorizzato"}, status_code=401)
         return _login_redirect()
 
     from services.acuity import get_appointment
@@ -971,8 +975,10 @@ async def trigger_appointment_analysis(
 
     full_appointment = await get_appointment(appointment_id, account_id)
     if not full_appointment:
-        msg = quote(f"Impossibile recuperare l'appuntamento {appointment_id} da Acuity.")
-        return RedirectResponse(url=f"/admin/ui/appointments?err={msg}", status_code=303)
+        return JSONResponse(
+            {"error": f"Impossibile recuperare l'appuntamento {appointment_id} da Acuity."},
+            status_code=404,
+        )
 
     background_tasks.add_task(
         run_analysis_pipeline,
@@ -980,8 +986,7 @@ async def trigger_appointment_analysis(
         acuity_account=account_id,
     )
 
-    msg = quote(f"Analisi avviata per appuntamento {appointment_id}. Apparirà nella lista analisi al termine (qualche minuto).")
-    return RedirectResponse(url=f"/admin/ui/appointments?ok={msg}", status_code=303)
+    return JSONResponse({"ok": True, "appointment_id": appointment_id})
 
 
 # ── Global documents (/admin/ui/global) ──────────────────────────────────────
