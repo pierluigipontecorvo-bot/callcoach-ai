@@ -511,6 +511,71 @@ async def analyses_list(
     )
 
 
+# ── Archivio (tutte le analisi, sola lettura) ─────────────────────────────────
+
+@router.get("/archivio", response_class=HTMLResponse)
+async def archivio(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    mese: str = "",   # "YYYY-MM"
+    op: str = "",
+    camp: str = "",
+    qual: str = "",
+):
+    if not _is_admin(request):
+        return _login_redirect()
+
+    from datetime import datetime as _dt
+    from sqlalchemy import and_, extract
+
+    stmt = select(Analysis).order_by(desc(Analysis.created_at))
+
+    filters = []
+    if mese:
+        try:
+            yr, mo = int(mese[:4]), int(mese[5:7])
+            filters.append(extract("year",  Analysis.created_at) == yr)
+            filters.append(extract("month", Analysis.created_at) == mo)
+        except (ValueError, IndexError):
+            pass
+    if op:
+        filters.append(Analysis.operator_name.ilike(f"%{op}%"))
+    if camp:
+        filters.append(Analysis.campaign_code.ilike(f"%{camp}%"))
+    if qual:
+        filters.append(Analysis.qualification_level == qual)
+
+    if filters:
+        stmt = stmt.where(and_(*filters))
+
+    result = await db.execute(stmt)
+    analyses = result.scalars().all()
+
+    # Mesi disponibili per il selettore
+    months_result = await db.execute(
+        select(
+            func.to_char(Analysis.created_at, "YYYY-MM").label("ym")
+        ).distinct().order_by(desc(func.to_char(Analysis.created_at, "YYYY-MM")))
+    )
+    available_months = [r.ym for r in months_result.all() if r.ym]
+
+    from utils.helpers import utcnow
+    return templates.TemplateResponse(
+        "archivio.html",
+        {
+            "request": request,
+            "analyses": analyses,
+            "now": utcnow(),
+            "active_page": "archivio",
+            "available_months": available_months,
+            "sel_mese": mese,
+            "sel_op": op,
+            "sel_camp": camp,
+            "sel_qual": qual,
+        },
+    )
+
+
 # ── Delete single analysis ────────────────────────────────────────────────────
 
 @router.post("/analyses/{analysis_id}/delete")

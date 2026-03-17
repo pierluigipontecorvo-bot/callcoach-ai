@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% set active_page = "archivio" %}
+
+{% block title %}Archivio Analisi — CallCoach Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="fw-bold mb-0">Archivio Analisi</h4>
+    <p class="text-muted small mb-0">Tutte le analisi elaborate — sola lettura.</p>
+  </div>
+  <span class="badge bg-secondary fs-6" id="arch-count-label">{{ analyses | length }} analisi</span>
+</div>
+
+{# ── Filtri server-side ──────────────────────────────────────────────────── #}
+<form method="get" action="/admin/ui/archivio" class="card shadow-sm p-3 mb-3">
+  <div class="row g-2 align-items-end">
+
+    <div class="col-auto">
+      <label class="form-label small mb-1">Mese</label>
+      <select name="mese" class="form-select form-select-sm" style="min-width:140px;">
+        <option value="">Tutti i periodi</option>
+        {% for m in available_months %}
+          <option value="{{ m }}" {% if sel_mese == m %}selected{% endif %}>
+            {{ m }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-auto">
+      <label class="form-label small mb-1">Qualifica</label>
+      <select name="qual" class="form-select form-select-sm" style="min-width:160px;">
+        <option value="">Tutte</option>
+        <option value="eccellente"   {% if sel_qual == 'eccellente'   %}selected{% endif %}>Eccellente</option>
+        <option value="buona"        {% if sel_qual == 'buona'        %}selected{% endif %}>Buona</option>
+        <option value="sufficiente"  {% if sel_qual == 'sufficiente'  %}selected{% endif %}>Sufficiente</option>
+        <option value="da_migliorare"{% if sel_qual == 'da_migliorare'%}selected{% endif %}>Da migliorare</option>
+        <option value="inaccurata"   {% if sel_qual == 'inaccurata'   %}selected{% endif %}>Inaccurata</option>
+        <option value="non_in_target"{% if sel_qual == 'non_in_target'%}selected{% endif %}>Non in target</option>
+        <option value="errore_tecnico"{% if sel_qual == 'errore_tecnico'%}selected{% endif %}>Errore tecnico</option>
+      </select>
+    </div>
+
+    <div class="col-auto">
+      <label class="form-label small mb-1">Operatore</label>
+      <input type="text" name="op" value="{{ sel_op }}" class="form-control form-control-sm"
+             placeholder="es. Francesca" style="min-width:140px;">
+    </div>
+
+    <div class="col-auto">
+      <label class="form-label small mb-1">Campagna</label>
+      <input type="text" name="camp" value="{{ sel_camp }}" class="form-control form-control-sm"
+             placeholder="es. INTER" style="min-width:140px;">
+    </div>
+
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="btn btn-primary btn-sm">Filtra</button>
+      <a href="/admin/ui/archivio" class="btn btn-outline-secondary btn-sm">Reset</a>
+    </div>
+
+  </div>
+</form>
+
+{# ── Ricerca client-side su risultati filtrati ─────────────────────────────── #}
+{% if analyses %}
+<div class="mb-2">
+  <input type="search" id="arch-search" class="form-control form-control-sm"
+         placeholder="🔍 Cerca ragione sociale, operatore, campagna…"
+         style="max-width:320px;"
+         oninput="archFilter()">
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle" id="archTable">
+      <thead class="table-light">
+        <tr>
+          <th>#</th>
+          <th>Campagna</th>
+          <th>Operatore</th>
+          <th>Ragione sociale</th>
+          <th>Data appuntamento</th>
+          <th class="text-center">Qualificazione</th>
+          <th class="text-center">Email</th>
+          <th>Creata il</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in analyses %}
+        {% set rs = (a.report_json or {}).get('ragione_sociale', '') if a.report_json else '' %}
+        <tr data-op="{{ (a.operator_name or '') | lower }}"
+            data-camp="{{ (a.campaign_code or '') | lower }}"
+            data-rs="{{ rs | lower }}">
+          <td class="text-muted small">{{ a.id }}</td>
+          <td><code class="small">{{ a.campaign_code or "—" }}</code></td>
+          <td>{{ a.operator_name or "—" }}</td>
+          <td class="small text-muted">{{ rs or "—" }}</td>
+          <td class="text-muted small">
+            {% if a.appointment_datetime %}
+              {{ a.appointment_datetime.strftime('%d/%m/%Y %H:%M') }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-center">
+            {% if a.qualification_level == 'non_in_target' %}
+              <span class="badge" style="background:#c0392b;">⛔ NON IN TARGET</span>
+            {% elif a.qualification_level == 'errore_tecnico' %}
+              <span class="badge" style="background:#e65100;">⚠️ Errore tecnico</span>
+            {% elif a.qualification_level == 'eccellente' %}
+              <span class="badge" style="background:#1565c0;">eccellente</span>
+            {% elif a.qualification_level == 'buona' %}
+              <span class="badge bg-success">buona</span>
+            {% elif a.qualification_level == 'sufficiente' %}
+              <span class="badge" style="background:#2e7d32;">sufficiente</span>
+            {% elif a.qualification_level == 'da_migliorare' %}
+              <span class="badge bg-warning text-dark">da migliorare</span>
+            {% elif a.qualification_level == 'inaccurata' %}
+              <span class="badge bg-danger">inaccurata</span>
+            {% elif a.processing_status == 'completed' %}
+              <span class="text-muted small">—</span>
+            {% elif a.processing_status == 'processing' %}
+              <span class="badge bg-warning text-dark">in corso</span>
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if a.email_sent %}
+              <span style="color:#2e7d32;" title="Email inviata">●</span>
+            {% else %}
+              <span style="color:#aaa;" title="Email non inviata">●</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ a.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+          <td>
+            <a href="/admin/ui/analyses/{{ a.id }}"
+               class="btn btn-sm btn-outline-secondary">Dettaglio</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div class="card shadow-sm text-center py-5">
+  <div style="font-size:2rem">🗄</div>
+  <p class="text-muted mt-2 mb-0">Nessuna analisi trovata con i filtri selezionati.</p>
+  <a href="/admin/ui/archivio" class="btn btn-outline-secondary btn-sm mt-3">Mostra tutte</a>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function archFilter() {
+  var q = (document.getElementById('arch-search').value || '').toLowerCase().trim();
+  var rows = document.querySelectorAll('#archTable tbody tr');
+  var visible = 0;
+  rows.forEach(function (row) {
+    var match = !q
+      || (row.dataset.op   || '').includes(q)
+      || (row.dataset.camp || '').includes(q)
+      || (row.dataset.rs   || '').includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  var lbl = document.getElementById('arch-count-label');
+  if (lbl) lbl.textContent = visible + ' analisi';
+}
+document.addEventListener('DOMContentLoaded', function () { archFilter(); });
+</script>
+{% endblock %}
