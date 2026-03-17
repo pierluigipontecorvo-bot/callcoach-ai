@@ -212,6 +212,30 @@
         Un indirizzo email per riga. Se vuoto, il report verrà inviato all'indirizzo di fallback.
         <code>inoltra@effoncall.com</code> viene sempre aggiunto automaticamente.
       </div>
+
+      <div class="mt-3 d-flex flex-column gap-2">
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="email_no_operator"
+                 id="emailNoOperatorToggle" role="switch"
+                 {% if campaign and campaign.email_no_operator %}checked{% endif %}
+                 {% if not campaign and form_data and form_data.email_no_operator == 'on' %}checked{% endif %}>
+          <label class="form-check-label" for="emailNoOperatorToggle">
+            <strong>Non inviare email all'operatore</strong>
+            <span class="text-muted small ms-1">— l'indirizzo <code>op.XX.nome@effoncall.com</code> viene escluso</span>
+          </label>
+        </div>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="email_disabled"
+                 id="emailDisabledToggle" role="switch"
+                 style="background-color: {% if campaign and campaign.email_disabled %}#dc3545{% else %}''{% endif %};"
+                 {% if campaign and campaign.email_disabled %}checked{% endif %}
+                 {% if not campaign and form_data and form_data.email_disabled == 'on' %}checked{% endif %}>
+          <label class="form-check-label" for="emailDisabledToggle">
+            <strong class="text-danger">Disabilita invio email per questa campagna</strong>
+            <span class="text-muted small ms-1">— nessuna email viene inviata a nessuno</span>
+          </label>
+        </div>
+      </div>
     </div>
   </div>
   {% endif %}

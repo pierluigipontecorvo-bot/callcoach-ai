@@ -407,20 +407,24 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
 
     _INOLTRO = "inoltra@effoncall.com"
+    _email_disabled    = bool(campaign_db and campaign_db.email_disabled)
+    _email_no_operator = bool(campaign_db and campaign_db.email_no_operator)
+
     recipients: list[str] = []
-    if campaign_db and campaign_db.email_recipients:
-        recipients = list(campaign_db.email_recipients)
-    if not recipients:
-        recipients = [cfg.fallback_email]
-    if operator_email and operator_email not in recipients:
-        recipients.insert(0, operator_email)
-    if _INOLTRO not in recipients:
-        recipients.append(_INOLTRO)
+    if not _email_disabled:
+        if campaign_db and campaign_db.email_recipients:
+            recipients = list(campaign_db.email_recipients)
+        if not recipients:
+            recipients = [cfg.fallback_email]
+        if operator_email and not _email_no_operator and operator_email not in recipients:
+            recipients.insert(0, operator_email)
+        if _INOLTRO not in recipients:
+            recipients.append(_INOLTRO)
 
     # ── 8b. Invia email report ────────────────────────────────────────────────
     email_sent = False
-    # Non inviare email per appuntamenti NON IN TARGET o errore tecnico
-    if qualification_level not in ("non_in_target", "errore_tecnico"):
+    # Non inviare se: campagna disabilitata, NON IN TARGET, errore tecnico
+    if not _email_disabled and qualification_level not in ("non_in_target", "errore_tecnico"):
         try:
             await _update_progress(analysis_id, 90, "Invio email report...")
             await send_analysis_report(

@@ -45,6 +45,8 @@ class Campaign(Base):
     qualification_params = Column(Text)
     client_info = Column(Text)
     email_recipients = Column(ARRAY(String))
+    email_no_operator = Column(Boolean, default=False)   # non inviare all'operatore
+    email_disabled    = Column(Boolean, default=False)   # non inviare a nessuno
     notes = Column(Text)                   # internal notes
     prompt_extra = Column(Text)            # per-campaign AI prompt override
     active = Column(Boolean, default=True)

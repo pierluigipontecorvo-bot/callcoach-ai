@@ -164,6 +164,8 @@ async def campaign_new_submit(
     qualification_params: str = Form(""),
     client_info: str = Form(""),
     email_recipients_raw: str = Form(""),
+    email_no_operator: str = Form("off"),
+    email_disabled: str = Form("off"),
     notes: str = Form(""),
     prompt_extra: str = Form(""),
     active: str = Form("off"),
@@ -211,6 +213,8 @@ async def campaign_new_submit(
         qualification_params=qualification_params.strip() or None,
         client_info=client_info.strip() or None,
         email_recipients=recipients or None,
+        email_no_operator=(email_no_operator == "on"),
+        email_disabled=(email_disabled == "on"),
         notes=notes.strip() or None,
         prompt_extra=prompt_extra.strip() or None,
         active=(active == "on"),
@@ -261,6 +265,8 @@ async def campaign_edit_submit(
     qualification_params: str = Form(""),
     client_info: str = Form(""),
     email_recipients_raw: str = Form(""),
+    email_no_operator: str = Form("off"),
+    email_disabled: str = Form("off"),
     notes: str = Form(""),
     prompt_extra: str = Form(""),
     active: str = Form("off"),
@@ -278,6 +284,8 @@ async def campaign_edit_submit(
     campaign.qualification_params = qualification_params.strip() or None
     campaign.client_info = client_info.strip() or None
     campaign.email_recipients = _parse_recipients(email_recipients_raw) or None
+    campaign.email_no_operator = (email_no_operator == "on")
+    campaign.email_disabled = (email_disabled == "on")
     campaign.notes = notes.strip() or None
     campaign.prompt_extra = prompt_extra.strip() or None
     campaign.active = (active == "on")
