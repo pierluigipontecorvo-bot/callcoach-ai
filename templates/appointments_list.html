@@ -204,17 +204,22 @@
           if (!row) return;
           var cell = row.querySelector('td[data-poll-cell]');
           if (!cell) return;
+          /* skip DOM update if status+progress unchanged — avoids unnecessary repaints */
+          var key = item.status + ':' + item.progress;
+          if (cell.dataset.pollKey === key) return;
           var html = renderStatusCell(item);
-          if (html) cell.innerHTML = html;
+          if (html) {
+            cell.innerHTML = html;
+            cell.dataset.pollKey = key;
+          }
         });
-        /* continua a fare poll SOLO se ci sono analisi ancora in corso */
+        /* continua SOLO se ci sono analisi ancora in corso */
         if (data.has_processing) {
           _reloadTimer = setTimeout(pollStatuses, 3000);
         }
-        /* quando tutto finito: nessun reload — la tabella rimane ferma */
+        /* quando finito: nessun reload — tabella rimane ferma */
       })
       .catch(function () {
-        /* errore di rete: riprova dopo 10s senza ricaricare la tabella */
         _reloadTimer = setTimeout(pollStatuses, 10000);
       });
   }
