@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # Railway shared CPU. "small" takes ~10x realtime → always times out.
     whisper_model_size: str = "tiny"
 
+    # Indirizzo mittente per le email (FROM)
+    email_from_address: str = "CallCoach AI <callcoach@effoncall.com>"
+
     # Fallback email when no campaign recipients are configured
     fallback_email: str = "pierluigi.pontecorvo@effoncall.it"
 

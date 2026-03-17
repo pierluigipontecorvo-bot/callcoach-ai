@@ -26,7 +26,7 @@ _LEVEL_EMOJI = {
     "eccellente": "⭐", "corretta": "✅", "insufficiente": "❌",
 }
 
-_FROM_ADDRESS = "CallCoach AI <callcoach@effoncall.com>"
+_FROM_ADDRESS = settings.email_from_address
 
 
 async def _send_via_resend(
@@ -69,7 +69,7 @@ async def _send_via_smtp(
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
     use_tls   = settings.smtp_port == 465
-    start_tls = settings.smtp_port == 587
+    start_tls = settings.smtp_port in (587, 2525)
 
     await aiosmtplib.send(
         msg,
