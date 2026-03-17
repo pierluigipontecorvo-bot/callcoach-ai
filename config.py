@@ -49,9 +49,9 @@ class Settings(BaseSettings):
     admin_password: str
 
     # Whisper model size: tiny / base / small / medium / large
-    # "base" (~145 MB RAM) is the safe default for Railway 512 MB containers.
-    # Switch to "small" only if running on a plan with >= 1 GB RAM.
-    whisper_model_size: str = "base"
+    # "tiny" (~75 MB RAM, ~2x realtime on CPU) is the only viable choice on
+    # Railway shared CPU. "small" takes ~10x realtime → always times out.
+    whisper_model_size: str = "tiny"
 
     # Fallback email when no campaign recipients are configured
     fallback_email: str = "pierluigi.pontecorvo@effoncall.it"
