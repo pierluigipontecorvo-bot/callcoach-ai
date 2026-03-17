@@ -129,7 +129,7 @@
                     onclick="sendEmail({{ a.id }}, 'all', this)">✉ Tutti</button>
             <button class="btn btn-sm btn-outline-secondary ms-1"
                     style="padding:2px 8px;font-size:12px;"
-                    title="Invia solo a inoltra@effoncall.com"
+                    title="Invia solo a inoltro@effoncall.com"
                     onclick="sendEmail({{ a.id }}, 'inoltra', this)">✉ Inoltro</button>
             {% endif %}
             <form method="post" action="/admin/ui/analyses/{{ a.id }}/delete"

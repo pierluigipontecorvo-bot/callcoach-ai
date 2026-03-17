@@ -406,7 +406,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     else:
         qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
 
-    _INOLTRO = "inoltra@effoncall.com"
+    _INOLTRO = "inoltro@effoncall.com"
     _email_disabled    = bool(campaign_db and campaign_db.email_disabled)
     _email_no_operator = bool(campaign_db and campaign_db.email_no_operator)
 

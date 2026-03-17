@@ -573,7 +573,7 @@ async def analysis_send_email(
     from services.email_service import send_analysis_report
     from config import settings as cfg
 
-    _INOLTRO = "inoltra@effoncall.com"
+    _INOLTRO = "inoltro@effoncall.com"
 
     if mode == "inoltra":
         recipients = [_INOLTRO]
