@@ -924,13 +924,22 @@ async def appointments_data(
 
 @router.get("/appointments/status-poll")
 async def appointments_status_poll(request: Request, db: AsyncSession = Depends(get_db)):
-    """Lightweight JSON endpoint — returns only in-progress analysis statuses."""
+    """Lightweight JSON endpoint — in-progress + recently completed analyses."""
     _require_auth(request)
+    from sqlalchemy import or_
+    from utils.helpers import utcnow
+    import datetime
+    cutoff = utcnow() - datetime.timedelta(minutes=10)
     result = await db.execute(
         select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
                Analysis.qualification_level, Analysis.progress, Analysis.step_message)
-        .where(Analysis.processing_status.in_(["processing", "pending"]))
+        .where(or_(
+            Analysis.processing_status.in_(["processing", "pending"]),
+            # also return analyses completed/errored in last 10 min so JS can update the cell
+            Analysis.updated_at >= cutoff,
+        ))
     )
+    rows = result.all()
     items = [
         {
             "appt_id": row.appointment_id,
@@ -940,9 +949,10 @@ async def appointments_status_poll(request: Request, db: AsyncSession = Depends(
             "progress": row.progress or 0,
             "step_message": row.step_message or "",
         }
-        for row in result.all()
+        for row in rows
     ]
-    return JSONResponse({"items": items, "has_processing": len(items) > 0})
+    has_processing = any(r.processing_status in ("processing", "pending") for r in rows)
+    return JSONResponse({"items": items, "has_processing": has_processing})
 
 
 @router.post("/appointments/{account_id}/{appointment_id}/analyze")

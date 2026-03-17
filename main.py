@@ -113,6 +113,19 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("global_documents table migration failed (non-fatal): %s", exc)
 
+    # ── Aggiungi colonna updated_at ad analyses se mancante ──────────────────
+    try:
+        from sqlalchemy import text
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(text(
+                "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS "
+                "updated_at TIMESTAMPTZ DEFAULT NOW()"
+            ))
+            await session.commit()
+    except Exception as exc:
+        logger.warning("analyses.updated_at migration failed (non-fatal): %s", exc)
+
     # ── Reset analisi bloccate in 'processing'/'pending' al riavvio ──────────
     # Se il container si riavvia mentre un'analisi è in corso, il record DB
     # rimane bloccato su 'processing' per sempre. Lo resettiamo a 'error' con

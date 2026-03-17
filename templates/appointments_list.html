@@ -169,18 +169,27 @@
             '<a href="#" onclick="loadAppts(true);return false;">Riprova</a></div>';
         }
         document.getElementById('appt-refresh').style.display = '';
-        _reloadTimer = setTimeout(pollStatuses, 10000);
       });
   };
 
-  /* ── Lightweight status poll — updates only Analisi cells, no table flicker ── */
-  function renderProgressCell(item) {
+  /* ── Lightweight status poll — updates ONLY Analisi cells, zero table flicker ── */
+  function renderStatusCell(item) {
     if (item.status === 'processing' || item.status === 'pending') {
       return '<div style="font-size:10px;color:#888;">' +
         (item.step_message || 'In corso...') + ' ' + item.progress + '%</div>' +
         '<div class="progress" style="height:5px;margin-top:2px;">' +
         '<div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" ' +
         'style="width:' + item.progress + '%"></div></div>';
+    }
+    if (item.qualification_level === 'errore_tecnico' || item.status === 'error') {
+      return '<a href="/admin/ui/analyses/' + item.analysis_id + '" ' +
+        'class="badge text-decoration-none" style="font-size:11px;background:#e65100;">' +
+        '\u26a0\ufe0f Errore tecnico</a>';
+    }
+    if (item.status === 'completed') {
+      return '<a href="/admin/ui/analyses/' + item.analysis_id + '" ' +
+        'class="badge bg-success text-decoration-none" style="font-size:11px;">' +
+        '\u2713 Completata</a>';
     }
     return null;
   }
@@ -190,28 +199,23 @@
     fetch('/admin/ui/appointments/status-poll', { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        var needFullReload = false;
         data.items.forEach(function (item) {
           var row = document.querySelector('tr[data-appt-id="' + item.appt_id + '"]');
-          if (!row) { needFullReload = true; return; }
+          if (!row) return;
           var cell = row.querySelector('td[data-poll-cell]');
           if (!cell) return;
-          var html = renderProgressCell(item);
-          if (html) {
-            cell.innerHTML = html;
-          }
+          var html = renderStatusCell(item);
+          if (html) cell.innerHTML = html;
         });
-        if (needFullReload) {
-          window.loadAppts(false, true);
-        } else if (data.has_processing) {
+        /* continua a fare poll SOLO se ci sono analisi ancora in corso */
+        if (data.has_processing) {
           _reloadTimer = setTimeout(pollStatuses, 3000);
-        } else {
-          /* all done — one final full reload to show completed badges */
-          window.loadAppts(false, true);
         }
+        /* quando tutto finito: nessun reload — la tabella rimane ferma */
       })
       .catch(function () {
-        _reloadTimer = setTimeout(pollStatuses, 8000);
+        /* errore di rete: riprova dopo 10s senza ricaricare la tabella */
+        _reloadTimer = setTimeout(pollStatuses, 10000);
       });
   }
 
