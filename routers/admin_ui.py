@@ -579,8 +579,17 @@ async def analysis_send_email(
     else:
         # mode == "operator": usa operator_email salvato in fase di analisi
         op_email = (analysis.operator_email or "").strip()
+        # Fallback per analisi vecchie senza operator_email: ricava da operator_name
+        # operator_name formato: "45-FRANCESCA F." → op.45.francesca@effoncall.com
+        if not op_email and analysis.operator_name:
+            import re as _re
+            m = _re.match(r'^(\d+)\s*-\s*(\S+)', analysis.operator_name.strip())
+            if m:
+                num       = m.group(1).zfill(2)
+                firstname = m.group(2).strip(".").lower()
+                op_email  = f"op.{num}.{firstname}@effoncall.com"
         if not op_email:
-            return JSONResponse({"ok": False, "error": "indirizzo email operatore non presente in questa analisi"}, status_code=400)
+            return JSONResponse({"ok": False, "error": "indirizzo email operatore non ricavabile"}, status_code=400)
         recipients = [op_email]
 
     try:
