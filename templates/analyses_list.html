@@ -122,6 +122,16 @@
           </td>
           <td style="white-space:nowrap;">
             <a href="/admin/ui/analyses/{{ a.id }}" class="btn btn-sm btn-outline-secondary">Dettaglio</a>
+            {% if a.processing_status == 'completed' and a.qualification_level not in ('non_in_target', 'errore_tecnico') %}
+            <button class="btn btn-sm btn-outline-primary ms-1"
+                    style="padding:2px 8px;font-size:12px;"
+                    title="Invia email a tutti i destinatari"
+                    onclick="sendEmail({{ a.id }}, 'all', this)">✉ Tutti</button>
+            <button class="btn btn-sm btn-outline-secondary ms-1"
+                    style="padding:2px 8px;font-size:12px;"
+                    title="Invia solo a inoltra@effoncall.com"
+                    onclick="sendEmail({{ a.id }}, 'inoltra', this)">✉ Inoltro</button>
+            {% endif %}
             <form method="post" action="/admin/ui/analyses/{{ a.id }}/delete"
                   style="display:inline;"
                   onsubmit="return confirm('Eliminare analisi #{{ a.id }}? L\'operazione non può essere annullata.')">
@@ -171,6 +181,27 @@ function filterAnalyses() {
   var lbl = document.getElementById('ana-count-label');
   if (lbl) lbl.textContent = visible + ' analisi';
 }
+/* ── Reinvia email ── */
+function sendEmail(analysisId, mode, btn) {
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  fetch('/admin/ui/analyses/' + analysisId + '/send-email?mode=' + mode, {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if (data.ok) {
+        btn.textContent = '✓ Inviata';
+        btn.classList.remove('btn-outline-primary','btn-outline-secondary');
+        btn.classList.add('btn-success');
+      } else {
+        btn.textContent = '✗ Errore';
+        btn.classList.add('btn-danger');
+        alert('Errore invio: ' + (data.error || 'sconosciuto'));
+        btn.disabled = false;
+      }
+    })
+    .catch(function(){ btn.textContent='✗'; btn.disabled=false; });
+}
+
 /* Init count on load */
 document.addEventListener('DOMContentLoaded', function () { filterAnalyses(); });
 </script>
