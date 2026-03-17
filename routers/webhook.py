@@ -529,26 +529,22 @@ async def acuity_webhook(
     if not should_analyze(full_appointment):
         return {"status": "skipped", "reason": "label not in trigger set"}
 
-    # Se l'azione NON è una nuova prenotazione, verifica che non esista già
-    # un'analisi completata per questo appuntamento — evita ri-analisi su
-    # semplici modifiche/riprogrammazioni mantenendo l'etichetta PRESO.
-    if action and action != "scheduled":
-        from database import AsyncSessionLocal
-        from models import Analysis
-        from sqlalchemy import select as _select
-        async with AsyncSessionLocal() as _sess:
-            existing = await _sess.scalar(
-                _select(Analysis).where(
-                    Analysis.appointment_id == str(appointment_id),
-                    Analysis.processing_status == "completed",
-                )
-            )
-        if existing:
-            logger.info(
-                "[%s] Skipped re-analysis: action=%s, analisi #%d già completata",
-                appointment_id, action, existing.id,
-            )
-            return {"status": "skipped", "reason": "analysis already completed"}
+    # Analizza solo se l'appuntamento è stato CREATO oggi — evita ri-analisi
+    # su modifiche/riprogrammazioni di appuntamenti vecchi.
+    from datetime import date, timezone
+    created_at_raw = full_appointment.get("createdAt") or full_appointment.get("created_at") or ""
+    try:
+        from utils.helpers import parse_iso_datetime
+        created_date = parse_iso_datetime(created_at_raw).astimezone(timezone.utc).date()
+    except Exception:
+        created_date = None
+
+    if created_date and created_date != date.today():
+        logger.info(
+            "[%s] Skipped: appuntamento creato il %s, non oggi",
+            appointment_id, created_date,
+        )
+        return {"status": "skipped", "reason": "appointment not created today"}
 
     # Respond immediately with 200 — pipeline runs in background
     background_tasks.add_task(
