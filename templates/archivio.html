@@ -132,7 +132,9 @@
               <span style="color:#aaa;" title="Email non inviata">●</span>
             {% endif %}
           </td>
-          <td class="text-muted small">{{ a.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+          <td class="text-muted small">
+            {% if a.created_at %}{{ a.created_at.strftime('%d/%m/%Y %H:%M') }}{% else %}—{% endif %}
+          </td>
           <td>
             <a href="/admin/ui/analyses/{{ a.id }}"
                class="btn btn-sm btn-outline-secondary">Dettaglio</a>

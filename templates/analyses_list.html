@@ -117,7 +117,9 @@
               <span class="badge bg-secondary">{{ a.processing_status }}</span>
             {% endif %}
           </td>
-          <td class="text-muted small">{{ a.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+          <td class="text-muted small">
+            {% if a.created_at %}{{ a.created_at.strftime('%d/%m/%Y %H:%M') }}{% else %}—{% endif %}
+          </td>
           <td style="white-space:nowrap;">
             <a href="/admin/ui/analyses/{{ a.id }}" class="btn btn-sm btn-outline-secondary">Dettaglio</a>
             <form method="post" action="/admin/ui/analyses/{{ a.id }}/delete"
