@@ -552,10 +552,12 @@ async def archivio(
     analyses = result.scalars().all()
 
     # Mesi disponibili per il selettore
+    from sqlalchemy import text as sa_text
     months_result = await db.execute(
-        select(
-            func.to_char(Analysis.created_at, "YYYY-MM").label("ym")
-        ).distinct().order_by(desc(func.to_char(Analysis.created_at, "YYYY-MM")))
+        sa_text(
+            "SELECT DISTINCT TO_CHAR(created_at, 'YYYY-MM') AS ym "
+            "FROM analyses WHERE created_at IS NOT NULL ORDER BY ym DESC"
+        )
     )
     available_months = [r.ym for r in months_result.all() if r.ym]
 
