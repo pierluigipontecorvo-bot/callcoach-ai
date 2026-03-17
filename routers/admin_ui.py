@@ -497,11 +497,13 @@ async def analyses_list(
     )
     analyses = result.scalars().all()
 
+    from utils.helpers import utcnow
     return templates.TemplateResponse(
         "analyses_list.html",
         {
             "request": request,
             "analyses": analyses,
+            "now": utcnow(),
             "active_page": "analyses",
             "flash_ok": request.query_params.get("ok", ""),
             "flash_err": request.query_params.get("err", ""),

@@ -78,12 +78,13 @@
             {% elif a.processing_status == 'error' %}
               <span class="badge bg-danger" title="{{ a.error_message or '' }}">errore</span>
             {% elif a.processing_status == 'processing' %}
-              <div style="font-size:10px;color:#666;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
-                   title="{{ a.step_message or 'In corso...' }} {{ a.progress or 0 }}%">
-                {{ a.step_message or 'In corso...' }} {{ a.progress or 0 }}%
+              {% set _mins = ((now - a.created_at).total_seconds() / 60) | int if a.created_at else 0 %}
+              <div style="font-size:10px;color:{% if _mins > 5 %}#c0392b{% else %}#666{% endif %};margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                   title="{{ a.step_message or 'In corso...' }} {{ a.progress or 0 }}% — {{ _mins }} min">
+                {% if _mins > 5 %}⚠ {% endif %}{{ a.step_message or 'In corso...' }} {{ a.progress or 0 }}%
               </div>
               <div class="progress" style="height:5px;">
-                <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning"
+                <div class="progress-bar progress-bar-striped progress-bar-animated {% if _mins > 5 %}bg-danger{% else %}bg-warning{% endif %}"
                      style="width:{{ a.progress or 0 }}%"></div>
               </div>
             {% else %}

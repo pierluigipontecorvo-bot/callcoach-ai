@@ -236,9 +236,14 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
                 "[%s] Trascrizione chiamata %d/%d (call_id=%s, %d bytes) …",
                 appointment_id, idx, len(recordings), call_id, len(audio_bytes),
             )
-            part = await transcribe_audio(audio_bytes)
+            # Timeout 3 min: audio è cappato a 3 min, Whisper small ~10x realtime = ~30s
+            # Se non finisce entro 180s, è bloccato → lo trattiamo come non disponibile
+            part = await asyncio.wait_for(transcribe_audio(audio_bytes), timeout=180)
             transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n{part}")
             logger.info("[%s] Chiamata %d: %d caratteri", appointment_id, idx, len(part))
+        except asyncio.TimeoutError:
+            logger.error("[%s] Trascrizione chiamata %d TIMEOUT (>180s) — skip", appointment_id, idx)
+            transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n[trascrizione non disponibile: timeout]")
         except Exception as exc:
             logger.error("[%s] Trascrizione fallita per call_id=%s: %s", appointment_id, call_id, exc)
             transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n[trascrizione non disponibile]")
