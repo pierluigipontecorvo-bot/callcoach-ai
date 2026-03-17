@@ -127,27 +127,29 @@ async def lifespan(app: FastAPI):
         logger.warning("analyses.updated_at migration failed (non-fatal): %s", exc)
 
     # ── Reset analisi bloccate in 'processing'/'pending' al riavvio ──────────
-    # Se il container si riavvia mentre un'analisi è in corso, il record DB
-    # rimane bloccato su 'processing' per sempre. Lo resettiamo a 'error' con
-    # qualification_level='errore_tecnico' in modo che appaia come tale nella UI.
     try:
+        import asyncio as _asyncio
         from sqlalchemy import text
         from database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(text("""
-                UPDATE analyses
-                SET processing_status = 'error',
-                    qualification_level = 'errore_tecnico',
-                    step_message = 'Analisi interrotta per riavvio del server.',
-                    report_json = COALESCE(report_json, '{}'::jsonb) || '{"errore_tecnico": true}'::jsonb
-                WHERE processing_status IN ('processing', 'pending')
-            """))
-            await session.commit()
-            if result.rowcount:
-                logger.warning(
-                    "Startup cleanup: reset %d analisi bloccate → errore_tecnico",
-                    result.rowcount,
-                )
+        async def _reset_stuck():
+            async with AsyncSessionLocal() as session:
+                # statement_timeout=4s per evitare blocchi su lock DB
+                await session.execute(text("SET LOCAL statement_timeout = '4000'"))
+                result = await session.execute(text("""
+                    UPDATE analyses
+                    SET processing_status = 'error',
+                        qualification_level = 'errore_tecnico',
+                        step_message = 'Analisi interrotta per riavvio del server.',
+                        report_json = COALESCE(report_json, '{}'::jsonb) || '{"errore_tecnico": true}'::jsonb
+                    WHERE processing_status IN ('processing', 'pending')
+                """))
+                await session.commit()
+                if result.rowcount:
+                    logger.warning(
+                        "Startup cleanup: reset %d analisi bloccate → errore_tecnico",
+                        result.rowcount,
+                    )
+        await _asyncio.wait_for(_reset_stuck(), timeout=8.0)
     except Exception as exc:
         logger.warning("Startup cleanup analisi bloccate fallito (non-fatal): %s", exc)
 
