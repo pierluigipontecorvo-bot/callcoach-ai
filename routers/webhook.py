@@ -209,6 +209,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         recordings = await find_and_download_all_recordings(
             phone=phone,
             campaign_code=campaign_info.get("raw"),
+            lookback_days=90,   # cattura tutte le telefonate degli ultimi 3 mesi
         )
     except Exception as exc:
         msg = f"Sidial error: {exc}"
@@ -367,9 +368,15 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     # ── 8. Email ──────────────────────────────────────────────────────────────
     from config import settings as cfg
 
-    _rating_to_level = {1: "inaccurata", 2: "da_migliorare", 3: "buona"}
-    qual_rating = report.get("qualificazione", {}).get("rating", 2)
-    qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
+    _rating_to_level = {
+        1: "inaccurata", 2: "da_migliorare", 3: "sufficiente", 4: "buona", 5: "eccellente"
+    }
+    qual_obj = report.get("qualificazione", {})
+    qual_rating = qual_obj.get("rating", 2)
+    if qual_obj.get("fuori_parametro"):
+        qualification_level = "non_in_target"
+    else:
+        qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
 
     _INOLTRO = "inoltra@effoncall.com"
     recipients: list[str] = []

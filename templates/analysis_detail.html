@@ -105,8 +105,9 @@
         <strong>{{ analysis.client_company or "—" }}</strong>
       </div>
       <div class="col-6 col-md-3">
-        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Telefono</div>
-        {{ analysis.client_phone or "—" }}
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">N. registrazioni</div>
+        {% set _nrec = analysis.transcript.count('--- CHIAMATA') if analysis.transcript else 0 %}
+        <strong>{{ _nrec if _nrec > 0 else "—" }}</strong>
       </div>
       <div class="col-6 col-md-3">
         <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Appuntamento</div>
@@ -120,8 +121,14 @@
           <span class="badge" style="background:#e65100; font-size:11px;">⚠️ ERRORE TECNICO</span>
         {% elif _qual.get('fuori_parametro') %}
           <span class="badge" style="background:#c0392b; font-size:11px;">⛔ NON IN TARGET</span>
+        {% elif analysis.qualification_level == 'non_in_target' %}
+          <span class="badge" style="background:#c0392b; font-size:11px;">⛔ NON IN TARGET</span>
+        {% elif analysis.qualification_level == 'eccellente' %}
+          <span class="badge" style="background:#1565c0;">eccellente</span>
         {% elif analysis.qualification_level == 'buona' %}
           <span class="badge bg-success">buona</span>
+        {% elif analysis.qualification_level == 'sufficiente' %}
+          <span class="badge" style="background:#2e7d32;">sufficiente</span>
         {% elif analysis.qualification_level == 'da_migliorare' %}
           <span class="badge bg-warning text-dark">da migliorare</span>
         {% elif analysis.qualification_level == 'inaccurata' %}

@@ -46,8 +46,16 @@
             {% else %}—{% endif %}
           </td>
           <td class="text-center">
-            {% if a.qualification_level == 'buona' %}
+            {% if a.qualification_level == 'non_in_target' %}
+              <span class="badge" style="background:#c0392b;">⛔ NON IN TARGET</span>
+            {% elif a.qualification_level == 'errore_tecnico' %}
+              <span class="badge" style="background:#e65100;">⚠️ Errore tecnico</span>
+            {% elif a.qualification_level == 'eccellente' %}
+              <span class="badge" style="background:#1565c0;">eccellente</span>
+            {% elif a.qualification_level == 'buona' %}
               <span class="badge bg-success">buona</span>
+            {% elif a.qualification_level == 'sufficiente' %}
+              <span class="badge" style="background:#2e7d32;">sufficiente</span>
             {% elif a.qualification_level == 'da_migliorare' %}
               <span class="badge bg-warning text-dark">da migliorare</span>
             {% elif a.qualification_level == 'inaccurata' %}
