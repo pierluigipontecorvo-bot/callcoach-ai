@@ -24,135 +24,65 @@ async def lifespan(app: FastAPI):
         # Don't crash on startup if Whisper isn't installed yet (e.g. local dev)
         logger.warning("Whisper model not loaded at startup: %s", exc)
 
-    # ── Fix campaigns with active=NULL → set to TRUE (schema DEFAULT TRUE) ────
-    try:
-        from sqlalchemy import text
-        from database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                text("UPDATE campaigns SET active = TRUE WHERE active IS NULL")
-            )
-            await session.commit()
-            if result.rowcount:
-                logger.info(
-                    "campaign active migration: fixed %d NULL→TRUE record(s)", result.rowcount
-                )
-    except Exception as exc:
-        logger.warning("campaign active migration failed (non-fatal): %s", exc)
+    # ── Startup DB migrations — each with hard timeout ──────────────────────
+    import asyncio as _asyncio
+    from sqlalchemy import text as _text
+    from database import AsyncSessionLocal as _ASL
 
-    # ── Migrate operator_name separator: ' · ' → '-' ───────────────────────
-    # Old records were stored as 'XX · NOME'; new format is 'XX-NOME'.
-    try:
-        from sqlalchemy import text
-        from database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                text(
-                    "UPDATE analyses "
-                    "SET operator_name = REPLACE(operator_name, ' · ', '-') "
-                    "WHERE operator_name LIKE '% · %'"
-                )
-            )
-            await session.commit()
-            if result.rowcount:
-                logger.info(
-                    "operator_name migration: updated %d record(s) (' · ' → '-')",
-                    result.rowcount,
-                )
-    except Exception as exc:
-        logger.warning("operator_name migration failed (non-fatal): %s", exc)
+    async def _run_sql(sql: str, label: str):
+        """Run a single SQL statement with a 6s hard timeout."""
+        try:
+            async def _exec():
+                async with _ASL() as s:
+                    await s.execute(_text("SET LOCAL statement_timeout = '5000'"))
+                    r = await s.execute(_text(sql))
+                    await s.commit()
+                    return getattr(r, "rowcount", 0)
+            rows = await _asyncio.wait_for(_exec(), timeout=6.0)
+            if rows:
+                logger.info("Migration '%s': %d row(s) affected", label, rows)
+        except Exception as exc:
+            logger.warning("Migration '%s' failed (non-fatal): %s", label, exc)
 
-    # ── Create prompt_sections table if it doesn't exist ─────────────────────
-    try:
-        from sqlalchemy import text
-        from database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            await session.execute(text("""
-                CREATE TABLE IF NOT EXISTS prompt_sections (
-                    id SERIAL PRIMARY KEY,
-                    section_key VARCHAR(50) UNIQUE NOT NULL,
-                    title VARCHAR(100) NOT NULL,
-                    content TEXT NOT NULL DEFAULT '',
-                    sort_order INT NOT NULL DEFAULT 0,
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """))
-            await session.commit()
-    except Exception as exc:
-        logger.warning("prompt_sections table migration failed (non-fatal): %s", exc)
+    await _run_sql(
+        "UPDATE campaigns SET active = TRUE WHERE active IS NULL",
+        "campaigns.active NULL→TRUE",
+    )
+    await _run_sql(
+        "UPDATE analyses SET operator_name = REPLACE(operator_name, ' · ', '-') "
+        "WHERE operator_name LIKE '% · %'",
+        "analyses.operator_name separator",
+    )
+    await _run_sql("""
+        CREATE TABLE IF NOT EXISTS prompt_sections (
+            id SERIAL PRIMARY KEY, section_key VARCHAR(50) UNIQUE NOT NULL,
+            title VARCHAR(100) NOT NULL, content TEXT NOT NULL DEFAULT '',
+            sort_order INT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW()
+        )""", "create prompt_sections")
+    await _run_sql(
+        "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS prompt_extra TEXT",
+        "campaigns.prompt_extra",
+    )
+    await _run_sql("""
+        CREATE TABLE IF NOT EXISTS global_documents (
+            id SERIAL PRIMARY KEY, title VARCHAR(200) NOT NULL,
+            content TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+        )""", "create global_documents")
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
+        "analyses.updated_at",
+    )
+    await _run_sql("""
+        UPDATE analyses
+        SET processing_status = 'error', qualification_level = 'errore_tecnico',
+            step_message = 'Analisi interrotta per riavvio del server.',
+            report_json = COALESCE(report_json, '{}'::jsonb) || '{"errore_tecnico": true}'::jsonb
+        WHERE processing_status IN ('processing', 'pending')
+        """, "reset stuck analyses")
 
-    # ── Add prompt_extra column to campaigns if not present ───────────────────
-    try:
-        from sqlalchemy import text
-        from database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS prompt_extra TEXT")
-            )
-            await session.commit()
-    except Exception as exc:
-        logger.warning("campaigns.prompt_extra migration failed (non-fatal): %s", exc)
-
-    # ── Create global_documents table if not present ──────────────────────────
-    try:
-        from sqlalchemy import text
-        from database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            await session.execute(text("""
-                CREATE TABLE IF NOT EXISTS global_documents (
-                    id SERIAL PRIMARY KEY,
-                    title VARCHAR(200) NOT NULL,
-                    content TEXT NOT NULL DEFAULT '',
-                    sort_order INTEGER NOT NULL DEFAULT 0,
-                    is_active BOOLEAN NOT NULL DEFAULT true,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """))
-            await session.commit()
-    except Exception as exc:
-        logger.warning("global_documents table migration failed (non-fatal): %s", exc)
-
-    # ── Aggiungi colonna updated_at ad analyses se mancante ──────────────────
-    try:
-        from sqlalchemy import text
-        from database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            await session.execute(text(
-                "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS "
-                "updated_at TIMESTAMPTZ DEFAULT NOW()"
-            ))
-            await session.commit()
-    except Exception as exc:
-        logger.warning("analyses.updated_at migration failed (non-fatal): %s", exc)
-
-    # ── Reset analisi bloccate in 'processing'/'pending' al riavvio ──────────
-    try:
-        import asyncio as _asyncio
-        from sqlalchemy import text
-        from database import AsyncSessionLocal
-        async def _reset_stuck():
-            async with AsyncSessionLocal() as session:
-                # statement_timeout=4s per evitare blocchi su lock DB
-                await session.execute(text("SET LOCAL statement_timeout = '4000'"))
-                result = await session.execute(text("""
-                    UPDATE analyses
-                    SET processing_status = 'error',
-                        qualification_level = 'errore_tecnico',
-                        step_message = 'Analisi interrotta per riavvio del server.',
-                        report_json = COALESCE(report_json, '{}'::jsonb) || '{"errore_tecnico": true}'::jsonb
-                    WHERE processing_status IN ('processing', 'pending')
-                """))
-                await session.commit()
-                if result.rowcount:
-                    logger.warning(
-                        "Startup cleanup: reset %d analisi bloccate → errore_tecnico",
-                        result.rowcount,
-                    )
-        await _asyncio.wait_for(_reset_stuck(), timeout=8.0)
-    except Exception as exc:
-        logger.warning("Startup cleanup analisi bloccate fallito (non-fatal): %s", exc)
-
+    logger.info("Startup migrations complete. Server accepting requests.")
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────
