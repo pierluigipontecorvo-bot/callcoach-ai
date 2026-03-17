@@ -95,6 +95,7 @@ async def _save_analysis(
     client_company: str,
     sidial_call_id: str,
     operator_name: str,
+    operator_email: str = "",
     qualification_level: str,
     email_sent: bool = False,
 ):
@@ -111,6 +112,7 @@ async def _save_analysis(
         obj.client_phone = phone
         obj.client_company = client_company or None
         obj.operator_name = operator_name
+        obj.operator_email = operator_email or None
         obj.acuity_account = acuity_account
         obj.acuity_label = "PRESO"
         obj.sidial_call_id = sidial_call_id
@@ -379,6 +381,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             client_company=client_company,
             sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
             operator_name=operator_display,
+            operator_email=operator_email,
             qualification_level="errore_tecnico",
             email_sent=False,
         )
@@ -457,6 +460,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             client_company=client_company,
             sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
             operator_name=operator_name_db,
+            operator_email=operator_email,
             qualification_level=qualification_level,
             email_sent=email_sent,
         )
