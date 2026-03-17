@@ -417,13 +417,23 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     if _INOLTRO not in recipients:
         recipients.append(_INOLTRO)
 
-    # EMAIL TEMPORANEAMENTE DISABILITATA — bug in corso di risoluzione
+    # ── 8b. Invia email report ────────────────────────────────────────────────
     email_sent = False
-    # try:
-    #     await send_analysis_report(...)
-    #     email_sent = True
-    # except Exception as exc:
-    #     logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
+    # Non inviare email per appuntamenti NON IN TARGET o errore tecnico
+    if qualification_level not in ("non_in_target", "errore_tecnico"):
+        try:
+            await _update_progress(analysis_id, 90, "Invio email report...")
+            await send_analysis_report(
+                recipients=recipients,
+                html_content=html_report,
+                operator_name=operator_display,
+                qualification_level=qualification_level,
+                appointment_datetime=appointment_data.get("datetime", ""),
+            )
+            email_sent = True
+            logger.info("[%s] Email inviata a %s", appointment_id, recipients)
+        except Exception as exc:
+            logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
 
     # ── 9. Save to DB ─────────────────────────────────────────────────────────
     await _update_progress(analysis_id, 95, "Salvataggio...")
