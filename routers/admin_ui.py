@@ -925,7 +925,8 @@ async def appointments_data(
 @router.get("/appointments/status-poll")
 async def appointments_status_poll(request: Request, db: AsyncSession = Depends(get_db)):
     """Lightweight JSON endpoint — in-progress + recently completed analyses."""
-    _require_auth(request)
+    if not _is_admin(request):
+        return JSONResponse({"items": [], "has_processing": False}, status_code=401)
     from sqlalchemy import or_
     from utils.helpers import utcnow
     import datetime
