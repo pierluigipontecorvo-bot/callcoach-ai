@@ -225,6 +225,20 @@ def build_analysis_prompt(
 
 ## TRASCRIZIONE CHIAMATA
 
+⚠️ REGOLA FONDAMENTALE — PIÙ CHIAMATE:
+Se la trascrizione contiene più sezioni "--- CHIAMATA N ---", leggile TUTTE come un percorso
+conversazionale unico e progressivo. Le risposte del prospect possono evolvere nel corso delle
+chiamate: una risposta inizialmente incerta ("non lo so", "devo controllare") può essere
+precisata o confermata in una chiamata successiva.
+
+CONTA SOLO LA RISPOSTA FINALE E CONFERMATA — non la prima risposta vaga o incompleta.
+Esempio: se nella CHIAMATA 1 il prospect dice "non so quanto spendiamo" e nella CHIAMATA 3
+conferma "controlliamo… spendiamo più di 1.000 euro al mese" → il valore da usare per la
+qualificazione è "più di 1.000 euro al mese", NON "non lo so".
+
+MAI classificare "non in target" basandosi solo sulla prima chiamata se le successive
+forniscono informazioni più precise e aggiornate.
+
 {transcript}
 
 
