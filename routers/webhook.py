@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from services.acuity import (
     check_webhook_signature,
     extract_phone,
+    extract_piva,
     extract_ragione_sociale,
     find_operator_email,
     get_appointment,
@@ -205,6 +206,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     )
 
     phone = extract_phone(appointment_data)
+    piva  = extract_piva(appointment_data)
     appointment_dt_str = appointment_data.get("datetime", "")
     appointment_dt = parse_iso_datetime(appointment_dt_str) if appointment_dt_str else None
     client_company = extract_ragione_sociale(appointment_data)
@@ -213,6 +215,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     operator_email = find_operator_email(appointment_data)
     operator_display = get_operator_display(appointment_data)
     logger.info("[%s] Operator: %s (email=%s)", appointment_id, operator_display, operator_email)
+    logger.info("[%s] Phone=%s | P.IVA=%s", appointment_id, phone, piva)
 
     # Save identifying info immediately so the UI shows it during processing
     _initial_op_name = operator_display
@@ -230,6 +233,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
             phone=phone,
             campaign_code=campaign_info.get("raw"),
             lookback_days=90,   # cattura tutte le telefonate degli ultimi 3 mesi
+            piva=piva,
         )
     except Exception as exc:
         msg = f"Sidial error: {exc}"

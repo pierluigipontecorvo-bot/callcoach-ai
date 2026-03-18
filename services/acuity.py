@@ -263,6 +263,7 @@ def format_operator_display(op_email: str) -> str:
 # ── Phone extraction ─────────────────────────────────────────────────────────
 
 _PHONE_FIELD_KEYWORDS = ("tel", "phone", "numero", "cellulare", "mobile", "cel")
+_PIVA_FIELD_KEYWORDS  = ("partita iva", "piva", "p.iva", "p. iva", " pi ", "codice fiscale", "vat")
 _PHONE_VALUE_RE = re.compile(r"[\d\s\+\-\(\)]{7,}")
 
 def extract_phone(appointment_data: dict) -> str:
@@ -297,6 +298,28 @@ def extract_phone(appointment_data: dict) -> str:
                 logger.info("Phone trovato in top-level field '%s': %s", field_name, v)
                 return v
 
+    return ""
+
+
+def extract_piva(appointment_data: dict) -> str:
+    """
+    Estrae la Partita IVA dall'appuntamento Acuity.
+    Cerca nei form fields per keyword: 'partita iva', 'piva', 'p.iva', ecc.
+    """
+    for form in (appointment_data.get("forms") or []):
+        for val in (form.get("values") or form.get("fields") or []):
+            field_name = (val.get("name") or val.get("label") or "").lower()
+            if any(kw in field_name for kw in _PIVA_FIELD_KEYWORDS):
+                v = (val.get("value") or "").strip()
+                if v:
+                    logger.info("P.IVA trovata in form field '%s': %s", field_name, v)
+                    return v
+    for val in (appointment_data.get("fields") or []):
+        field_name = (val.get("name") or val.get("label") or "").lower()
+        if any(kw in field_name for kw in _PIVA_FIELD_KEYWORDS):
+            v = (val.get("value") or "").strip()
+            if v:
+                return v
     return ""
 
 

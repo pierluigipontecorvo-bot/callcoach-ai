@@ -46,7 +46,7 @@ def _normalize_phone(raw: str) -> str:
     return digits
 
 
-# ── Ricerca lead per telefono ─────────────────────────────────────────────────
+# ── Ricerca lead per telefono / P.IVA ────────────────────────────────────────
 
 async def _search_leads_by_phone(phone: str) -> list[dict]:
     """
@@ -104,6 +104,41 @@ async def _search_leads_by_phone(phone: str) -> list[dict]:
             unique.append(lead)
 
     logger.info("searchLeads: trovati %d lead per phone=%s", len(unique), phone)
+    return unique
+
+
+async def _search_leads_by_piva(piva: str) -> list[dict]:
+    """
+    POST a=searchLeads cercando la P.IVA in campi comuni Sidial.
+    Usato come fallback quando la ricerca per telefono non trova nulla.
+    """
+    # Prova i campi più probabili dove Sidial potrebbe salvare la P.IVA
+    piva_fields = ("vat", "piva", "fiscal_code", "codfis", "partitaiva", "taxid", "cf")
+    results: list[dict] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for field in piva_fields:
+            params_json = json.dumps([{"table": "leads", "field": field, "operator": "=", "value": piva}])
+            try:
+                resp = await client.post(_BASE, data={"a": "searchLeads", "apiToken": _TOKEN, "params": params_json})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict) and not data.get("response", {}).get("error") and "results" in data:
+                        if data["results"]:
+                            logger.info("searchLeads P.IVA: trovati %d lead in campo '%s' per piva=%s",
+                                        len(data["results"]), field, piva)
+                            results.extend(data["results"])
+                            break  # trovato, non serve continuare
+                    logger.debug("searchLeads P.IVA: campo '%s' non ha trovato nulla per piva=%s", field, piva)
+            except Exception as exc:
+                logger.warning("searchLeads P.IVA fallito campo=%s: %s", field, exc)
+
+    seen: set = set()
+    unique: list[dict] = []
+    for lead in results:
+        lead_id = str(lead.get("id") or "")
+        if lead_id and lead_id not in seen:
+            seen.add(lead_id)
+            unique.append(lead)
     return unique
 
 
@@ -270,6 +305,7 @@ async def find_and_download_all_recordings(
     appointment_dt: Optional[datetime] = None,   # ignorato, mantenuto per compatibilità
     lookback_days: int = 30,
     max_recs: int = 20,
+    piva: str = "",
 ) -> list[Tuple[str, bytes]]:
     """
     Trova e scarica le registrazioni degli ultimi lookback_days giorni per un
@@ -308,8 +344,14 @@ async def find_and_download_all_recordings(
         logger.info("Sidial: riprovo searchLeads con phone originale=%s", phone)
         leads = await _search_leads_by_phone(phone)
 
+    # Fallback: cerca per P.IVA se il telefono non ha trovato nulla
+    if not leads and piva:
+        logger.info("Sidial: nessun lead per phone=%s — riprovo con P.IVA=%s", norm_phone, piva)
+        leads = await _search_leads_by_piva(piva)
+
     if not leads:
-        logger.warning("Sidial: nessun lead per phone=%s", norm_phone)
+        logger.warning("Sidial: nessun lead per phone=%s%s", norm_phone,
+                       f" né per P.IVA={piva}" if piva else "")
         return []
 
     # 2. Raccoglie tutte le registrazioni per ogni lead trovato
