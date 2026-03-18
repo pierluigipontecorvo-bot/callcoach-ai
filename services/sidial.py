@@ -182,54 +182,84 @@ def _parse_rec_datetime(rec: dict) -> Optional[datetime]:
 
 # ── Download singola registrazione ────────────────────────────────────────────
 
-async def _download_rec(rec_id: str) -> Optional[bytes]:
+async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str) -> Optional[bytes]:
+    """Tenta un GET sull'URL e restituisce i bytes se sembra audio valido."""
+    try:
+        resp = await client.get(url)
+        logger.info("%s → HTTP %s content-type=%s len=%d",
+                    label, resp.status_code,
+                    resp.headers.get("content-type", "?"), len(resp.content))
+        if resp.status_code != 200:
+            return None
+        content_type = resp.headers.get("content-type", "")
+        # Se JSON → controlla se c'è un URL indiretto
+        if "application/json" in content_type or resp.content[:1] in (b"{", b"["):
+            try:
+                data = resp.json()
+                for key in ("url", "recording_url", "audio_url", "file_url", "path"):
+                    rec_url = data.get(key)
+                    if rec_url:
+                        audio_resp = await client.get(rec_url)
+                        if audio_resp.status_code == 200 and len(audio_resp.content) > 1000:
+                            return audio_resp.content
+            except Exception:
+                pass
+            return None
+        if len(resp.content) > 1000:
+            return resp.content
+        return None
+    except Exception as exc:
+        logger.warning("%s fallito: %s", label, exc)
+        return None
+
+
+async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
     """
-    GET a=getLeadRec&id={rec_id} → bytes audio (mp3/wav).
+    Tenta di scaricare l'audio di una registrazione Sidial.
+    Strategie in ordine:
+      1. GET  a=getLeadRec&id={rec_id}   (endpoint ufficiale)
+      2. POST a=getLeadRec               (stesso endpoint via POST)
+      3. URL diretto dal fileName        (fallback se le prime due danno 404)
     """
-    url = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
+    base_no_php = _BASE.rsplit("/", 1)[0]  # es. https://effoncall.sidial.cloud
+
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        # 1. GET ufficiale
+        url_get = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
+        audio = await _try_fetch_audio(client, url_get, f"getLeadRec GET id={rec_id}")
+        if audio:
+            return audio
+
+        # 2. POST
         try:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                logger.warning("getLeadRec id=%s HTTP %s", rec_id, resp.status_code)
-                return None
-
-            content_type = resp.headers.get("content-type", "")
-
-            # Se la risposta è JSON → errore o URL indiretto
-            if "application/json" in content_type or resp.content[:1] in (b"{", b"["):
-                try:
-                    data = resp.json()
-                    # Errore esplicito dall'API
-                    if data.get("error") or data.get("response", {}).get("error"):
-                        msg = (
-                            data.get("message")
-                            or data.get("response", {}).get("message", "?")
-                        )
-                        logger.warning("getLeadRec id=%s errore: %s", rec_id, msg)
-                        return None
-                    # Potrebbe essere un URL indiretto
-                    for key in ("url", "recording_url", "audio_url", "file_url"):
-                        rec_url = data.get(key)
-                        if rec_url:
-                            audio_resp = await client.get(rec_url)
-                            audio_resp.raise_for_status()
-                            if len(audio_resp.content) > 1000:
-                                return audio_resp.content
-                except Exception:
-                    pass  # non è JSON, potrebbe essere audio diretto
-
-            # Audio diretto (mp3/wav/ogg/…)
-            if len(resp.content) > 1000:
-                logger.info("getLeadRec: %d bytes per id=%s", len(resp.content), rec_id)
-                return resp.content
-
-            logger.warning("getLeadRec id=%s: risposta troppo corta (%d B)", rec_id, len(resp.content))
-            return None
-
+            resp_post = await client.post(
+                _BASE,
+                data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN},
+            )
+            logger.info("getLeadRec POST id=%s → HTTP %s len=%d",
+                        rec_id, resp_post.status_code, len(resp_post.content))
+            if resp_post.status_code == 200 and len(resp_post.content) > 1000:
+                ct = resp_post.headers.get("content-type", "")
+                if "application/json" not in ct and resp_post.content[:1] not in (b"{", b"["):
+                    return resp_post.content
         except Exception as exc:
-            logger.error("getLeadRec fallito per id=%s: %s", rec_id, exc)
-            return None
+            logger.warning("getLeadRec POST fallito id=%s: %s", rec_id, exc)
+
+        # 3. URL diretto dal fileName (se disponibile)
+        if file_name:
+            for candidate in (
+                f"{base_no_php}/recordings/{file_name}",
+                f"{base_no_php}/rec/{file_name}",
+                f"{base_no_php}/audio/{file_name}",
+                f"{_BASE}?a=getRecFile&fileName={file_name}&apiToken={_TOKEN}",
+            ):
+                audio = await _try_fetch_audio(client, candidate, f"fileName fallback {candidate}")
+                if audio:
+                    logger.info("Audio trovato via fileName fallback: %s", candidate)
+                    return audio
+
+        logger.warning("Sidial: nessun audio scaricabile per rec_id=%s fileName=%s", rec_id, file_name)
+        return None
 
 
 # ── Facciata pubblica ─────────────────────────────────────────────────────────
@@ -340,7 +370,8 @@ async def find_and_download_all_recordings(
         if not rec_id:
             logger.warning("Sidial: record senza id: %s", rec)
             continue
-        audio_bytes = await _download_rec(rec_id)
+        logger.info("Sidial: tentativo download rec completo: %s", rec)
+        audio_bytes = await _download_rec(rec_id, file_name=rec.get("fileName") or "")
         if audio_bytes:
             results.append((rec_id, audio_bytes))
         else:
