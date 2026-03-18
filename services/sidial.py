@@ -261,32 +261,18 @@ async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
     RETRY_DELAY = 30  # secondi tra un tentativo e l'altro
 
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        for attempt in range(1, MAX_RETRIES + 1):
-            url_get = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
-            audio = await _try_fetch_audio(client, url_get, f"getLeadRec GET id={rec_id} tentativo={attempt}")
-            if audio:
-                return audio
+        # 1. GET standard
+        url_std = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
+        audio = await _try_fetch_audio(client, url_std, f"getLeadRec GET id={rec_id}")
+        if audio:
+            return audio
 
-            if attempt < MAX_RETRIES:
-                logger.info(
-                    "getLeadRec id=%s: file non ancora disponibile — riprovo tra %ds (tentativo %d/%d)",
-                    rec_id, RETRY_DELAY, attempt, MAX_RETRIES,
-                )
-                await asyncio.sleep(RETRY_DELAY)
-
-        # URL diretto dal fileName (se disponibile) come ultima risorsa
-        base_no_php = _BASE.rsplit("/", 1)[0]
-        if file_name:
-            for candidate in (
-                f"{base_no_php}/recordings/{file_name}",
-                f"{base_no_php}/rec/{file_name}",
-                f"{base_no_php}/audio/{file_name}",
-                f"{_BASE}?a=getRecFile&fileName={file_name}&apiToken={_TOKEN}",
-            ):
-                audio = await _try_fetch_audio(client, candidate, f"fileName fallback {candidate}")
-                if audio:
-                    logger.info("Audio trovato via fileName fallback: %s", candidate)
-                    return audio
+        # 2. GET con raw=1 — bypassa il check converted="n" lato Sidial
+        url_raw = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}&raw=1"
+        audio = await _try_fetch_audio(client, url_raw, f"getLeadRec GET id={rec_id} raw=1")
+        if audio:
+            logger.info("Audio scaricato via raw=1 per rec_id=%s", rec_id)
+            return audio
 
         logger.warning("Sidial: nessun audio scaricabile per rec_id=%s fileName=%s", rec_id, file_name)
         return None
@@ -407,12 +393,22 @@ async def find_and_download_all_recordings(
         if not rec_id:
             logger.warning("Sidial: record senza id: %s", rec)
             continue
+        converted = (rec.get("converted") or "n").lower()
+        if converted != "y":
+            logger.warning(
+                "Sidial: rec_id=%s fileName=%s non ancora convertita (converted=%s) — "
+                "getLeadRec non servirà il file. Riprovo comunque.",
+                rec_id, rec.get("fileName"), converted,
+            )
         logger.info("Sidial: tentativo download rec completo: %s", rec)
         audio_bytes = await _download_rec(rec_id, file_name=rec.get("fileName") or "")
         if audio_bytes:
             results.append((rec_id, audio_bytes))
         else:
-            logger.warning("Sidial: nessun audio per rec_id=%s — skipping", rec_id)
+            logger.warning(
+                "Sidial: nessun audio per rec_id=%s (converted=%s) — skipping",
+                rec_id, converted,
+            )
 
     logger.info(
         "Sidial: %d/%d registrazioni scaricate per phone=%s",
