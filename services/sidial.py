@@ -251,36 +251,31 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str) -> O
 async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
     """
     Tenta di scaricare l'audio di una registrazione Sidial.
-    Strategie in ordine:
-      1. GET  a=getLeadRec&id={rec_id}   (endpoint ufficiale)
-      2. POST a=getLeadRec               (stesso endpoint via POST)
-      3. URL diretto dal fileName        (fallback se le prime due danno 404)
+    Strategia: GET a=getLeadRec (ufficiale), con retry automatico se il file
+    non è ancora disponibile (converted="n" lato Sidial).
+    Ritenta fino a MAX_RETRIES volte con RETRY_DELAY secondi di pausa.
     """
-    base_no_php = _BASE.rsplit("/", 1)[0]  # es. https://effoncall.sidial.cloud
+    import asyncio
+
+    MAX_RETRIES = 4
+    RETRY_DELAY = 30  # secondi tra un tentativo e l'altro
 
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        # 1. GET ufficiale
-        url_get = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
-        audio = await _try_fetch_audio(client, url_get, f"getLeadRec GET id={rec_id}")
-        if audio:
-            return audio
+        for attempt in range(1, MAX_RETRIES + 1):
+            url_get = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
+            audio = await _try_fetch_audio(client, url_get, f"getLeadRec GET id={rec_id} tentativo={attempt}")
+            if audio:
+                return audio
 
-        # 2. POST
-        try:
-            resp_post = await client.post(
-                _BASE,
-                data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN},
-            )
-            logger.info("getLeadRec POST id=%s → HTTP %s len=%d",
-                        rec_id, resp_post.status_code, len(resp_post.content))
-            if resp_post.status_code == 200 and len(resp_post.content) > 1000:
-                ct = resp_post.headers.get("content-type", "")
-                if "application/json" not in ct and resp_post.content[:1] not in (b"{", b"["):
-                    return resp_post.content
-        except Exception as exc:
-            logger.warning("getLeadRec POST fallito id=%s: %s", rec_id, exc)
+            if attempt < MAX_RETRIES:
+                logger.info(
+                    "getLeadRec id=%s: file non ancora disponibile — riprovo tra %ds (tentativo %d/%d)",
+                    rec_id, RETRY_DELAY, attempt, MAX_RETRIES,
+                )
+                await asyncio.sleep(RETRY_DELAY)
 
-        # 3. URL diretto dal fileName (se disponibile)
+        # URL diretto dal fileName (se disponibile) come ultima risorsa
+        base_no_php = _BASE.rsplit("/", 1)[0]
         if file_name:
             for candidate in (
                 f"{base_no_php}/recordings/{file_name}",
