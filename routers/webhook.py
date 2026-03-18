@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from services.acuity import (
     check_webhook_signature,
+    extract_phone,
     extract_ragione_sociale,
     find_operator_email,
     get_appointment,
@@ -203,7 +204,7 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         campaign_info.get("agente"),
     )
 
-    phone = appointment_data.get("phone", "")
+    phone = extract_phone(appointment_data)
     appointment_dt_str = appointment_data.get("datetime", "")
     appointment_dt = parse_iso_datetime(appointment_dt_str) if appointment_dt_str else None
     client_company = extract_ragione_sociale(appointment_data)

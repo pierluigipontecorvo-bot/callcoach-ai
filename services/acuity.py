@@ -260,6 +260,46 @@ def format_operator_display(op_email: str) -> str:
     return op_email or "—"
 
 
+# ── Phone extraction ─────────────────────────────────────────────────────────
+
+_PHONE_FIELD_KEYWORDS = ("tel", "phone", "numero", "cellulare", "mobile", "cel")
+_PHONE_VALUE_RE = re.compile(r"[\d\s\+\-\(\)]{7,}")
+
+def extract_phone(appointment_data: dict) -> str:
+    """
+    Extract phone number from Acuity appointment data.
+    Priority:
+      1. Top-level 'phone' field
+      2. Form fields whose name contains phone-related keywords
+      3. Any field value that looks like a phone number
+    """
+    # 1. Standard top-level field
+    phone = (appointment_data.get("phone") or "").strip()
+    if phone:
+        return phone
+
+    # 2. Search form fields by keyword
+    for form in (appointment_data.get("forms") or []):
+        for val in (form.get("values") or form.get("fields") or []):
+            field_name = (val.get("name") or val.get("label") or "").lower()
+            if any(kw in field_name for kw in _PHONE_FIELD_KEYWORDS):
+                v = (val.get("value") or "").strip()
+                if v:
+                    logger.info("Phone trovato in form field '%s': %s", field_name, v)
+                    return v
+
+    # 3. Top-level fields array
+    for val in (appointment_data.get("fields") or []):
+        field_name = (val.get("name") or val.get("label") or "").lower()
+        if any(kw in field_name for kw in _PHONE_FIELD_KEYWORDS):
+            v = (val.get("value") or "").strip()
+            if v:
+                logger.info("Phone trovato in top-level field '%s': %s", field_name, v)
+                return v
+
+    return ""
+
+
 # ── Ragione Sociale extraction ────────────────────────────────────────────────
 
 _RS_KEYWORDS = ("ragione", "azienda", "cliente", "societa", "company")
