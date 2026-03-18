@@ -122,7 +122,7 @@
           </td>
           <td style="white-space:nowrap;">
             <a href="/admin/ui/analyses/{{ a.id }}" class="btn btn-sm btn-outline-secondary">Dettaglio</a>
-            {% if a.processing_status == 'completed' and a.qualification_level not in ('non_in_target', 'errore_tecnico') %}
+            {% if a.processing_status == 'completed' and a.qualification_level not in ('errore_tecnico',) %}
             <button class="btn btn-sm btn-outline-primary ms-1"
                     style="padding:2px 8px;font-size:12px;"
                     title="Invia email all'operatore"
@@ -189,12 +189,14 @@ function sendEmail(analysisId, mode, btn) {
     .then(function(r){ return r.json(); })
     .then(function(data){
       if (data.ok) {
+        var origText = btn.textContent.indexOf('Operatore') >= 0 ? '✉ Operatore' : '✉ Inoltro';
+        var origClass = btn.classList.contains('btn-outline-primary') ? 'btn-outline-primary' : 'btn-outline-secondary';
         btn.textContent = '✓ Inviata';
         btn.classList.remove('btn-outline-primary','btn-outline-secondary');
         btn.classList.add('btn-success');
         var dest = data.recipients ? data.recipients.join('\n') : '—';
-        btn.title = 'Inviata a: ' + (data.recipients || []).join(', ');
         alert('✅ Email inviata a:\n\n' + dest);
+        setTimeout(function(){ btn.textContent=origText; btn.classList.remove('btn-success'); btn.classList.add(origClass); btn.disabled=false; }, 3000);
       } else {
         btn.textContent = '✗ Errore';
         btn.classList.add('btn-danger');

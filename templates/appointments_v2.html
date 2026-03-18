@@ -59,7 +59,7 @@
            'style="font-size:11px;background:' + cfg.bg + ';">' + cfg.label + '</a>';
   }
 
-  var _NO_EMAIL = ['non_in_target','errore_tecnico',''];
+  var _NO_EMAIL = ['errore_tecnico',''];
   function emailButtonsHtml(analysisId) {
     return '<button class="btn btn-sm btn-outline-primary" style="padding:2px 6px;font-size:11px;" ' +
            'onclick="sendEmail(' + analysisId + ',\'operator\',this)" title="Invia all\'operatore">✉ Op</button>' +
@@ -75,11 +75,13 @@
       .then(function(r){ return r.json(); })
       .then(function(data){
         if (data.ok) {
-          btn.textContent = '✓';
+          var origText = btn.title === "Invia all'operatore" ? '✉ Op' : '✉ Inoltro';
+          btn.textContent = '✓ Inviata';
           btn.classList.remove('btn-outline-primary','btn-outline-secondary');
           btn.classList.add('btn-success');
           var dest = data.recipients ? data.recipients.join('\n') : '—';
           alert('✅ Email inviata a:\n\n' + dest);
+          setTimeout(function(){ btn.textContent=origText; btn.classList.remove('btn-success'); btn.classList.add(mode==='operator'?'btn-outline-primary':'btn-outline-secondary'); btn.disabled=false; }, 3000);
         } else {
           btn.textContent = '✗';
           btn.classList.add('btn-danger');
