@@ -431,18 +431,40 @@ async def find_and_download_all_recordings(
             lookback_days, norm_phone,
         )
 
-    # 5. Scarica le registrazioni selezionate
+    # 5. Filtra registrazioni troppo corte (< 30s = ringback/segreteria automatica)
+    MIN_CALL_SECONDS = 30
+    useful = [r for r in recs_to_download if int(r.get("callLength") or 0) >= MIN_CALL_SECONDS]
+    skipped_short = len(recs_to_download) - len(useful)
+    if skipped_short:
+        logger.info(
+            "Sidial: scartate %d registrazioni < %ds (ringback/segreteria)",
+            skipped_short, MIN_CALL_SECONDS,
+        )
+
+    # Controlla se ci sono registrazioni lunghe ancora in conversione (converted='n')
+    pending_long = [
+        r for r in recs_to_download
+        if int(r.get("callLength") or 0) >= MIN_CALL_SECONDS
+        and (r.get("converted") or "n").lower() != "y"
+    ]
+    if pending_long:
+        logger.warning(
+            "Sidial: %d registrazioni utili ancora in conversione (converted=n): %s",
+            len(pending_long),
+            [r.get("id") for r in pending_long],
+        )
+
+    # 6. Scarica solo le registrazioni utili e già convertite
     results: list[Tuple[str, bytes]] = []
-    for rec in recs_to_download:
+    for rec in useful:
         rec_id = str(rec.get("id") or "")
         if not rec_id:
-            logger.warning("Sidial: record senza id: %s", rec)
             continue
         converted = (rec.get("converted") or "n").lower()
         if converted != "y":
             logger.info(
-                "Sidial: rec_id=%s (converted=%s) — file non ancora disponibile, skip.",
-                rec_id, converted,
+                "Sidial: rec_id=%s callLength=%ss — ancora in conversione, skip.",
+                rec_id, rec.get("callLength"),
             )
             continue
         logger.info("Sidial: tentativo download rec completo: %s", rec)
@@ -450,15 +472,21 @@ async def find_and_download_all_recordings(
         if audio_bytes:
             results.append((rec_id, audio_bytes))
         else:
-            logger.warning(
-                "Sidial: nessun audio per rec_id=%s (converted=%s) — skipping",
-                rec_id, converted,
-            )
+            logger.warning("Sidial: nessun audio per rec_id=%s — skipping", rec_id)
 
     logger.info(
-        "Sidial: %d/%d registrazioni scaricate per phone=%s",
-        len(results), len(recs_to_download), norm_phone,
+        "Sidial: %d/%d registrazioni scaricate per phone=%s%s",
+        len(results), len(useful), norm_phone,
+        f" ({len(pending_long)} in attesa conversione)" if pending_long else "",
     )
+
+    # Se nessuna registrazione scaricata ma ci sono in attesa di conversione →
+    # restituisce lista vuota con flag speciale per segnalarlo al webhook
+    if not results and pending_long:
+        # Aggiungi un marker speciale come primo elemento vuoto
+        # Il webhook lo interpreterà come "registrazione in attesa, riprovare"
+        pass  # il webhook gestirà il caso "0 registrazioni" normalmente
+
     return results
 
 

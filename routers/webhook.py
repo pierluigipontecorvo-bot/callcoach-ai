@@ -248,7 +248,18 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
         return
 
     if not recordings:
-        msg = f"Nessuna registrazione trovata su Sidial per phone='{phone}' (norm='{_normalize_phone(phone)}') lookback=90gg"
+        # Controlla se il motivo è che le registrazioni sono ancora in conversione
+        from services.sidial import _search_recs_by_lead, _search_leads_by_phone, _normalize_phone as _np
+        _norm = _np(phone)
+        _leads_check = await _search_leads_by_phone(_norm)
+        _pending_msg = ""
+        for _lead in _leads_check[:3]:
+            _recs_check = await _search_recs_by_lead(str(_lead.get("id") or ""))
+            _pending = [r for r in _recs_check if (r.get("converted") or "n").lower() != "y" and int(r.get("callLength") or 0) >= 30]
+            if _pending:
+                _pending_msg = f" — {len(_pending)} registrazioni lunghe in attesa di conversione Sidial (riprovare tra 30-60 minuti)"
+                break
+        msg = f"Nessuna registrazione scaricabile per phone='{phone}'{_pending_msg}"
         logger.error("[%s] %s", appointment_id, msg)
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
