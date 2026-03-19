@@ -440,11 +440,11 @@ async def find_and_download_all_recordings(
             continue
         converted = (rec.get("converted") or "n").lower()
         if converted != "y":
-            logger.warning(
-                "Sidial: rec_id=%s fileName=%s non ancora convertita (converted=%s) — "
-                "getLeadRec non servirà il file. Riprovo comunque.",
-                rec_id, rec.get("fileName"), converted,
+            logger.info(
+                "Sidial: rec_id=%s (converted=%s) — file non ancora disponibile, skip.",
+                rec_id, converted,
             )
+            continue
         logger.info("Sidial: tentativo download rec completo: %s", rec)
         audio_bytes = await _download_rec(rec_id, file_name=rec.get("fileName") or "")
         if audio_bytes:
