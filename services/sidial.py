@@ -251,28 +251,73 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str) -> O
 async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
     """
     Tenta di scaricare l'audio di una registrazione Sidial.
-    Strategia: GET a=getLeadRec (ufficiale), con retry automatico se il file
-    non è ancora disponibile (converted="n" lato Sidial).
-    Ritenta fino a MAX_RETRIES volte con RETRY_DELAY secondi di pausa.
+    Prova più strategie in sequenza fino a trovare un file audio valido.
     """
-    import asyncio
-
-    MAX_RETRIES = 4
-    RETRY_DELAY = 30  # secondi tra un tentativo e l'altro
+    base_host = _BASE.split("/api.php")[0]  # es. https://effoncall.sidial.cloud
 
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+
         # 1. GET standard
         url_std = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
         audio = await _try_fetch_audio(client, url_std, f"getLeadRec GET id={rec_id}")
         if audio:
             return audio
 
-        # 2. GET con raw=1 — bypassa il check converted="n" lato Sidial
+        # 2. GET con raw=1
         url_raw = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}&raw=1"
-        audio = await _try_fetch_audio(client, url_raw, f"getLeadRec GET id={rec_id} raw=1")
+        audio = await _try_fetch_audio(client, url_raw, f"getLeadRec GET raw=1 id={rec_id}")
         if audio:
             logger.info("Audio scaricato via raw=1 per rec_id=%s", rec_id)
             return audio
+
+        # 3. POST a=getLeadRec
+        try:
+            resp = await client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN})
+            logger.info("getLeadRec POST id=%s → HTTP %s content-type=%s len=%d",
+                        rec_id, resp.status_code,
+                        resp.headers.get("content-type", "?"), len(resp.content))
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                ct = resp.headers.get("content-type", "")
+                if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
+                    logger.info("Audio scaricato via POST getLeadRec per rec_id=%s", rec_id)
+                    return resp.content
+        except Exception as exc:
+            logger.warning("getLeadRec POST fallito rec_id=%s: %s", rec_id, exc)
+
+        # 4. URL diretti basati sul fileName (percorsi comuni Sidial)
+        if file_name:
+            name = file_name.strip()
+            # Estrai data dal nome file (YYYYMMDD_...)
+            date_prefix = name[:8] if len(name) >= 8 and name[:8].isdigit() else ""
+            candidate_paths = [
+                f"/recordings/{name}",
+                f"/recordings/{name}.mp3",
+                f"/recordings/{name}.wav",
+                f"/audio/{name}",
+                f"/audio/{name}.mp3",
+                f"/rec/{name}",
+                f"/rec/{name}.mp3",
+                f"/media/{name}",
+                f"/media/{name}.mp3",
+            ]
+            if date_prefix and len(date_prefix) == 8:
+                yr, mo, dy = date_prefix[:4], date_prefix[4:6], date_prefix[6:8]
+                candidate_paths += [
+                    f"/recordings/{yr}/{mo}/{dy}/{name}.mp3",
+                    f"/recordings/{yr}/{mo}/{dy}/{name}.wav",
+                    f"/recordings/{yr}-{mo}-{dy}/{name}.mp3",
+                ]
+            for path in candidate_paths:
+                url = f"{base_host}{path}"
+                try:
+                    resp = await client.get(url, headers={"Authorization": f"Bearer {_TOKEN}"})
+                    if resp.status_code == 200 and len(resp.content) > 1000:
+                        ct = resp.headers.get("content-type", "")
+                        if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
+                            logger.info("Audio scaricato via percorso diretto %s per rec_id=%s", path, rec_id)
+                            return resp.content
+                except Exception:
+                    pass
 
         logger.warning("Sidial: nessun audio scaricabile per rec_id=%s fileName=%s", rec_id, file_name)
         return None
