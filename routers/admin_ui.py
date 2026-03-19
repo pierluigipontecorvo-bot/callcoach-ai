@@ -1152,13 +1152,12 @@ async def appointments_status_poll(request: Request, db: AsyncSession = Depends(
     from sqlalchemy import or_
     from utils.helpers import utcnow
     import datetime
-    cutoff = utcnow() - datetime.timedelta(minutes=10)
+    cutoff = utcnow() - datetime.timedelta(days=30)
     result = await db.execute(
         select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
                Analysis.qualification_level, Analysis.progress, Analysis.step_message)
         .where(or_(
             Analysis.processing_status.in_(["processing", "pending"]),
-            # also return analyses completed/errored in last 10 min so JS can update the cell
             Analysis.updated_at >= cutoff,
         ))
     )

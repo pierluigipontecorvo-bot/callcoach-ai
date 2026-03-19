@@ -87,7 +87,7 @@
         {% set _has_analysis = a.analysis is not none %}
         {% set _completed = _has_analysis and a.analysis.status == 'completed' %}
         {% set _ql = a.analysis.qualification_level if _has_analysis else '' %}
-        {% set _can_email = _completed and _ql not in ('non_in_target', 'errore_tecnico', '') %}
+        {% set _can_email = _completed and _ql != 'errore_tecnico' and _ql != '' %}
         <tr data-appt-id="{{ a.id }}"
             data-group="{{ a.date_group }}"
             data-op="{{ a.op_display }}"
