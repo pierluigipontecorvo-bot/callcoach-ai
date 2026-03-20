@@ -10,10 +10,18 @@
     <h4 class="fw-bold mb-0">Appuntamenti <span style="color:#f9a825;font-size:14px;">v2</span></h4>
     <p class="text-muted small mb-0" id="appt-subtitle">&nbsp;</p>
   </div>
-  <button id="appt-refresh" onclick="loadAppts(true)"
-          class="btn btn-sm btn-outline-secondary" style="display:none;font-size:12px;">
-    ↺ Aggiorna
-  </button>
+  <div class="d-flex align-items-center gap-2">
+    <label class="small text-muted mb-0" style="white-space:nowrap;">🎙 Motore:</label>
+    <select id="global-engine-select" class="form-select form-select-sm" style="width:auto;font-size:12px;">
+      <option value="">Default</option>
+      <option value="openai">OpenAI Whisper</option>
+      <option value="assemblyai">AssemblyAI (speaker)</option>
+    </select>
+    <button id="appt-refresh" onclick="loadAppts(true)"
+            class="btn btn-sm btn-outline-secondary" style="font-size:12px;">
+      ↺ Aggiorna
+    </button>
+  </div>
 </div>
 
 <div id="appt-container">
@@ -269,9 +277,9 @@
   window.triggerAnalyze = function(btn, account, apptId, isRianalizza){
     if(isRianalizza&&!confirm('Già analizzato. Eseguire di nuovo?'))return;
     btn.disabled=true; btn.textContent='…';
-    /* Read engine from the sibling dropdown (if present) */
-    var engineSel = btn.parentElement ? btn.parentElement.querySelector('.engine-select') : null;
-    var engineVal = engineSel ? engineSel.value : '';
+    /* Legge il motore dal selettore globale in cima alla pagina */
+    var globalSel = document.getElementById('global-engine-select');
+    var engineVal = globalSel ? globalSel.value : '';
     var analyzeUrl='/admin/ui/appointments/'+account+'/'+apptId+'/analyze';
     if(engineVal)analyzeUrl+='?engine='+encodeURIComponent(engineVal);
     fetch(analyzeUrl,{

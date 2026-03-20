@@ -191,19 +191,10 @@
           {# Azioni #}
           <td>
             {% set _is_done = _has_analysis and a.analysis.status == 'completed' %}
-            <div class="d-flex align-items-center gap-1">
-              <button class="btn btn-dark btn-sm" style="font-size:11px;padding:3px 10px;"
-                      onclick="triggerAnalyze(this, '{{ a.account }}', '{{ a.id }}', {{ 'true' if _is_done else 'false' }})">
-                {% if _is_done %}↺ Ri-analizza{% else %}▶ Analizza{% endif %}
-              </button>
-              <select class="form-select form-select-sm engine-select"
-                      style="font-size:10px;padding:2px 4px;width:auto;min-width:80px;"
-                      title="Motore trascrizione">
-                <option value="">Default</option>
-                <option value="openai">OpenAI</option>
-                <option value="assemblyai">AssemblyAI</option>
-              </select>
-            </div>
+            <button class="btn btn-dark btn-sm" style="font-size:11px;padding:3px 10px;"
+                    onclick="triggerAnalyze(this, '{{ a.account }}', '{{ a.id }}', {{ 'true' if _is_done else 'false' }})">
+              {% if _is_done %}↺ Ri-analizza{% else %}▶ Analizza{% endif %}
+            </button>
           </td>
 
         </tr>
