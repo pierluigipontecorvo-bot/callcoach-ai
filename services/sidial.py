@@ -431,15 +431,19 @@ async def find_and_download_all_recordings(
             lookback_days, norm_phone,
         )
 
-    # 5. Filtra registrazioni troppo corte (< 30s = ringback/segreteria automatica)
-    MIN_CALL_SECONDS = 30
+    # 5. Filtra registrazioni troppo corte (< 10s = puro ringback, nessun audio utile)
+    MIN_CALL_SECONDS = 10
     useful = [r for r in recs_to_download if int(r.get("callLength") or 0) >= MIN_CALL_SECONDS]
     skipped_short = len(recs_to_download) - len(useful)
     if skipped_short:
         logger.info(
-            "Sidial: scartate %d registrazioni < %ds (ringback/segreteria)",
+            "Sidial: scartate %d registrazioni < %ds (ringback puro)",
             skipped_short, MIN_CALL_SECONDS,
         )
+    # Fallback: se il filtro ha eliminato tutto, usa tutte le registrazioni originali
+    if not useful:
+        logger.warning("Sidial: filtro %ds ha eliminato tutto — uso tutte le registrazioni", MIN_CALL_SECONDS)
+        useful = recs_to_download
 
     # Controlla se ci sono registrazioni lunghe ancora in conversione (converted='n')
     pending_long = [
