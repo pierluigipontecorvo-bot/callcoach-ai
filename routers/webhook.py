@@ -233,39 +233,54 @@ async def run_analysis_pipeline(
     )
 
     # ── 2. Find & download ALL recordings for this contact ────────────────────
-    await _update_progress(analysis_id, 10, "Ricerca registrazione su Sidial...")
-    try:
-        recordings = await find_and_download_all_recordings(
-            phone=phone,
-            campaign_code=campaign_info.get("raw"),
-            lookback_days=90,   # cattura tutte le telefonate degli ultimi 3 mesi
-            piva=piva,
-        )
-    except Exception as exc:
-        msg = f"Sidial error: {exc}"
-        logger.error("[%s] %s", appointment_id, msg, exc_info=True)
-        await _save_error(analysis_id, appointment_id, msg, acuity_account)
-        return
-
     if not phone:
         msg = "Numero di telefono assente nell'appuntamento Acuity — impossibile cercare su Sidial"
         logger.error("[%s] %s", appointment_id, msg)
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
+    # Retry fino a 5 volte con 3 min di attesa — Sidial impiega tempo a convertire
+    import asyncio as _asyncio
+    _MAX_RETRIES   = 5
+    _RETRY_WAIT_S  = 180   # 3 minuti tra un tentativo e l'altro
+    recordings = []
+    for _attempt in range(1, _MAX_RETRIES + 1):
+        await _update_progress(
+            analysis_id, 10,
+            f"Ricerca registrazione su Sidial (tentativo {_attempt}/{_MAX_RETRIES})…",
+        )
+        try:
+            recordings = await find_and_download_all_recordings(
+                phone=phone,
+                campaign_code=campaign_info.get("raw"),
+                lookback_days=90,
+                piva=piva,
+            )
+        except Exception as exc:
+            msg = f"Sidial error: {exc}"
+            logger.error("[%s] %s", appointment_id, msg, exc_info=True)
+            await _save_error(analysis_id, appointment_id, msg, acuity_account)
+            return
+
+        if recordings:
+            break   # trovate — procedi
+
+        if _attempt < _MAX_RETRIES:
+            logger.warning(
+                "[%s] Tentativo %d/%d: 0 registrazioni scaricabili — attendo %ds prima di riprovare",
+                appointment_id, _attempt, _MAX_RETRIES, _RETRY_WAIT_S,
+            )
+            await _update_progress(
+                analysis_id, 10,
+                f"Registrazione in conversione su Sidial — riprovo tra {_RETRY_WAIT_S//60} min (tentativo {_attempt}/{_MAX_RETRIES})…",
+            )
+            await _asyncio.sleep(_RETRY_WAIT_S)
+
     if not recordings:
-        # Controlla se il motivo è che le registrazioni sono ancora in conversione
-        from services.sidial import _search_recs_by_lead, _search_leads_by_phone, _normalize_phone as _np
-        _norm = _np(phone)
-        _leads_check = await _search_leads_by_phone(_norm)
-        _pending_msg = ""
-        for _lead in _leads_check[:3]:
-            _recs_check = await _search_recs_by_lead(str(_lead.get("id") or ""))
-            _pending = [r for r in _recs_check if (r.get("converted") or "n").lower() != "y" and int(r.get("callLength") or 0) >= 30]
-            if _pending:
-                _pending_msg = f" — {len(_pending)} registrazioni lunghe in attesa di conversione Sidial (riprovare tra 30-60 minuti)"
-                break
-        msg = f"Nessuna registrazione scaricabile per phone='{phone}'{_pending_msg}"
+        msg = (
+            f"Nessuna registrazione scaricabile per phone='{phone}' dopo {_MAX_RETRIES} tentativi "
+            f"(ultima verifica: registrazioni ancora in conversione su Sidial)"
+        )
         logger.error("[%s] %s", appointment_id, msg)
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
