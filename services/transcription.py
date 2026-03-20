@@ -90,6 +90,7 @@ async def transcribe_with_assemblyai(
                 "audio_url": upload_url,
                 "speaker_labels": True,
                 "language_code": "it",
+                "speech_model": "best",   # richiesto per speaker diarization su italiano
             },
         )
         transcript_resp.raise_for_status()
@@ -129,6 +130,8 @@ async def transcribe_audio(
     engine=None usa il default globale (settings.transcription_engine).
     """
     _engine = engine or settings.transcription_engine or "openai"
+    logger.info("🎙 Motore trascrizione selezionato: %s (engine param=%s, global=%s)",
+                _engine, engine, settings.transcription_engine)
 
     if _engine == "assemblyai":
         return await transcribe_with_assemblyai(audio_bytes, filename)
