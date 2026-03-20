@@ -154,16 +154,22 @@ async def _save_error(analysis_id: int | None, appointment_id: str, error_msg: s
 
 # ── Full pipeline ──────────────────────────────────────────────────────────────
 
-async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
+async def run_analysis_pipeline(
+    appointment_data: dict,
+    acuity_account: int,
+    engine_override: str | None = None,
+):
     """
     1. Parse campaign code
     2. Find & download recording from Sidial
-    3. Transcribe with Whisper
+    3. Transcribe with Whisper / AssemblyAI
     4. Load campaign config from DB
     5. Analyse with Claude
     6. Generate HTML report
     7. Send email
     8. Save to DB
+
+    engine_override: if provided, bypasses both global and campaign engine settings.
     """
     appointment_id = str(appointment_data.get("id", "unknown"))
     logger.info("[%s] Pipeline started (account=%d)", appointment_id, acuity_account)
@@ -268,17 +274,24 @@ async def run_analysis_pipeline(appointment_data: dict, acuity_account: int):
     await _update_progress(analysis_id, 20, f"{len(recordings)} registrazione/i trovata/e, trascrizione in corso...")
 
     # ── 3. Transcribe all recordings and concatenate ───────────────────────────
+    # Determine transcription engine: override > campaign > global default
+    _engine = engine_override or (
+        campaign_db.transcription_engine
+        if _campaign_pre and _campaign_pre.transcription_engine
+        else None
+    )
+
     transcript_parts = []
     for idx, (call_id, audio_bytes) in enumerate(recordings, start=1):
         pct = 20 + int(40 * (idx - 1) / len(recordings))
         await _update_progress(analysis_id, pct, f"Trascrizione chiamata {idx}/{len(recordings)}...")
         try:
             logger.info(
-                "[%s] Trascrizione chiamata %d/%d (call_id=%s, %d bytes) …",
+                "[%s] Trascrizione chiamata %d/%d (call_id=%s, %d bytes, engine=%s) …",
                 appointment_id, idx, len(recordings), call_id, len(audio_bytes),
+                _engine or "global_default",
             )
-            # Audio cappato a 1 min → Whisper small su CPU ~10-20s → nessun timeout necessario
-            part = await transcribe_audio(audio_bytes)
+            part = await transcribe_audio(audio_bytes, engine=_engine)
             transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n{part}")
             logger.info("[%s] Chiamata %d: %d caratteri", appointment_id, idx, len(part))
         except Exception as exc:

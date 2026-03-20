@@ -269,7 +269,12 @@
   window.triggerAnalyze = function(btn, account, apptId, isRianalizza){
     if(isRianalizza&&!confirm('Già analizzato. Eseguire di nuovo?'))return;
     btn.disabled=true; btn.textContent='…';
-    fetch('/admin/ui/appointments/'+account+'/'+apptId+'/analyze',{
+    /* Read engine from the sibling dropdown (if present) */
+    var engineSel = btn.parentElement ? btn.parentElement.querySelector('.engine-select') : null;
+    var engineVal = engineSel ? engineSel.value : '';
+    var analyzeUrl='/admin/ui/appointments/'+account+'/'+apptId+'/analyze';
+    if(engineVal)analyzeUrl+='?engine='+encodeURIComponent(engineVal);
+    fetch(analyzeUrl,{
       method:'POST',credentials:'same-origin',headers:{'accept':'application/json'},
     })
       .then(function(r){return r.json();})

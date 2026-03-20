@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # OpenAI — Whisper API per trascrizione cloud (sostituisce Whisper locale)
     openai_api_key: str = ""
 
+    # AssemblyAI — trascrizione alternativa con speaker diarization
+    assemblyai_api_key: str = ""
+    transcription_engine: str = "openai"  # "openai" or "assemblyai"
+
     # Security
     secret_key: str
     admin_password: str

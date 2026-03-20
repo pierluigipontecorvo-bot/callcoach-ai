@@ -49,6 +49,7 @@ class Campaign(Base):
     email_disabled    = Column(Boolean, default=False)   # non inviare a nessuno
     notes = Column(Text)                   # internal notes
     prompt_extra = Column(Text)            # per-campaign AI prompt override
+    transcription_engine = Column(String, nullable=True)  # None = use global default
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -168,6 +168,7 @@ async def campaign_new_submit(
     email_disabled: str = Form("off"),
     notes: str = Form(""),
     prompt_extra: str = Form(""),
+    transcription_engine: str = Form(""),
     active: str = Form("off"),
 ):
     if not _is_admin(request):
@@ -217,6 +218,7 @@ async def campaign_new_submit(
         email_disabled=(email_disabled == "on"),
         notes=notes.strip() or None,
         prompt_extra=prompt_extra.strip() or None,
+        transcription_engine=transcription_engine.strip() or None,
         active=(active == "on"),
     )
     db.add(campaign)
@@ -269,6 +271,7 @@ async def campaign_edit_submit(
     email_disabled: str = Form("off"),
     notes: str = Form(""),
     prompt_extra: str = Form(""),
+    transcription_engine: str = Form(""),
     active: str = Form("off"),
 ):
     if not _is_admin(request):
@@ -288,6 +291,7 @@ async def campaign_edit_submit(
     campaign.email_disabled = (email_disabled == "on")
     campaign.notes = notes.strip() or None
     campaign.prompt_extra = prompt_extra.strip() or None
+    campaign.transcription_engine = transcription_engine.strip() or None
     campaign.active = (active == "on")
 
     await db.commit()
@@ -1183,6 +1187,7 @@ async def trigger_appointment_analysis(
     appointment_id: str,
     request: Request,
     background_tasks: BackgroundTasks,
+    engine: Optional[str] = None,
 ):
     if not _is_admin(request):
         # AJAX call: return 401 JSON; form POST fallback: redirect
@@ -1202,10 +1207,14 @@ async def trigger_appointment_analysis(
             status_code=404,
         )
 
+    # engine param: "" or None → no override (use campaign or global default)
+    engine_override = engine.strip() if engine and engine.strip() else None
+
     background_tasks.add_task(
         run_analysis_pipeline,
         appointment_data=full_appointment,
         acuity_account=account_id,
+        engine_override=engine_override,
     )
 
     return JSONResponse({"ok": True, "appointment_id": appointment_id})

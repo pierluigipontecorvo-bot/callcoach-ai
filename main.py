@@ -64,6 +64,10 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS email_disabled BOOLEAN DEFAULT FALSE",
         "campaigns.email_disabled",
     )
+    await _run_sql(
+        "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS transcription_engine VARCHAR",
+        "campaigns.transcription_engine",
+    )
     await _run_sql("""
         CREATE TABLE IF NOT EXISTS global_documents (
             id SERIAL PRIMARY KEY, title VARCHAR(200) NOT NULL,

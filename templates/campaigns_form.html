@@ -240,6 +240,36 @@
   </div>
   {% endif %}
 
+  {# ── Motore trascrizione (solo per campagne specifiche) ── #}
+  {% if not is_global %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold">Motore trascrizione</div>
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Motore trascrizione</label>
+        <select class="form-select" name="transcription_engine">
+          <option value=""
+            {% if not campaign or not campaign.transcription_engine %}selected{% endif %}>
+            Default globale
+          </option>
+          <option value="openai"
+            {% if campaign and campaign.transcription_engine == 'openai' %}selected{% endif %}>
+            OpenAI Whisper
+          </option>
+          <option value="assemblyai"
+            {% if campaign and campaign.transcription_engine == 'assemblyai' %}selected{% endif %}>
+            AssemblyAI (con speaker)
+          </option>
+        </select>
+        <div class="form-text">
+          Sovrascrive il default globale (<code>TRANSCRIPTION_ENGINE</code>) solo per questa campagna.
+          «Default globale» usa il valore impostato nella variabile Railway.
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {# ── Istruzioni specifiche di campagna ── #}
   {% if not is_global %}
   <div class="card shadow-sm mb-4">
