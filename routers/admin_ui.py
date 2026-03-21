@@ -1220,6 +1220,65 @@ async def trigger_appointment_analysis(
     return JSONResponse({"ok": True, "appointment_id": appointment_id})
 
 
+# ── Acuity debug (/admin/ui/acuity-debug) ────────────────────────────────────
+
+@router.get("/acuity-debug", response_class=JSONResponse)
+async def acuity_debug(request: Request, appointment_id: str = "", account_id: int = 1):
+    """
+    GET /admin/ui/acuity-debug?appointment_id=XXXXX&account_id=1
+    Mostra tutti i dati raw di un appuntamento Acuity inclusi i form fields.
+    """
+    if not _is_admin(request):
+        return JSONResponse({"error": "Non autorizzato"}, status_code=401)
+    if not appointment_id:
+        return JSONResponse({"error": "Specificare appointment_id"}, status_code=400)
+
+    from services.acuity import get_appointment, extract_phone, extract_piva, extract_ragione_sociale, find_operator_email, get_operator_display
+
+    data = await get_appointment(appointment_id, account_id)
+    if not data:
+        return JSONResponse({"error": "Appuntamento non trovato"}, status_code=404)
+
+    # Estrai tutti i form fields in modo leggibile
+    all_fields = []
+    for form in (data.get("forms") or []):
+        form_name = form.get("name") or form.get("id") or "—"
+        for val in (form.get("values") or form.get("fields") or []):
+            all_fields.append({
+                "form": form_name,
+                "field_name": val.get("name") or val.get("label") or "—",
+                "field_id": val.get("id") or "—",
+                "value": val.get("value") or "",
+            })
+    for val in (data.get("fields") or []):
+        all_fields.append({
+            "form": "top-level fields",
+            "field_name": val.get("name") or val.get("label") or "—",
+            "field_id": val.get("id") or "—",
+            "value": val.get("value") or "",
+        })
+
+    return JSONResponse({
+        "appointment_id": data.get("id"),
+        "created_at": data.get("createdAt"),
+        "datetime": data.get("datetime"),
+        "type": data.get("type"),
+        "calendar": data.get("calendar"),
+        "labels": data.get("labels"),
+        "firstName": data.get("firstName"),
+        "lastName": data.get("lastName"),
+        "email": data.get("email"),
+        "phone_top_level": data.get("phone"),
+        "extracted_phone": extract_phone(data),
+        "extracted_piva": extract_piva(data),
+        "extracted_ragione_sociale": extract_ragione_sociale(data),
+        "extracted_operator_email": find_operator_email(data),
+        "extracted_operator_display": get_operator_display(data),
+        "form_fields": all_fields,
+        "raw_forms": data.get("forms"),
+    })
+
+
 # ── Sidial test (/admin/ui/sidial-test) ──────────────────────────────────────
 
 @router.get("/sidial-test", response_class=JSONResponse)
