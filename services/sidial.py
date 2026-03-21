@@ -107,6 +107,38 @@ async def _search_leads_by_phone(phone: str) -> list[dict]:
     return unique
 
 
+async def _search_leads_by_ragione_sociale(ragione_sociale: str) -> list[dict]:
+    """
+    POST a=searchLeads cercando per Ragione Sociale nei campi comuni Sidial.
+    Usa LIKE (contains) perché il nome potrebbe essere parziale.
+    """
+    rs_fields = ("companyName", "company", "ragioneSociale", "businessName", "name", "ragione_sociale")
+    results: list[dict] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for field in rs_fields:
+            params_json = json.dumps([{"table": "leads", "field": field, "operator": "like", "value": ragione_sociale}])
+            try:
+                resp = await client.post(_BASE, data={"a": "searchLeads", "apiToken": _TOKEN, "params": params_json})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict) and not data.get("response", {}).get("error") and data.get("results"):
+                        logger.info("searchLeads RS: trovati %d lead in campo '%s' per rs=%s",
+                                    len(data["results"]), field, ragione_sociale)
+                        results.extend(data["results"])
+                        break
+            except Exception as exc:
+                logger.warning("searchLeads RS fallito campo=%s: %s", field, exc)
+
+    seen: set = set()
+    unique: list[dict] = []
+    for lead in results:
+        lead_id = str(lead.get("id") or "")
+        if lead_id and lead_id not in seen:
+            seen.add(lead_id)
+            unique.append(lead)
+    return unique
+
+
 async def _search_leads_by_piva(piva: str) -> list[dict]:
     """
     POST a=searchLeads cercando la P.IVA in campi comuni Sidial.
@@ -325,172 +357,192 @@ async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
 
 # ── Facciata pubblica ─────────────────────────────────────────────────────────
 
+async def _collect_all_leads(
+    phone: str,
+    piva: str = "",
+    ragione_sociale: str = "",
+    last_name: str = "",
+) -> list[dict]:
+    """
+    Cerca lead su Sidial con tutti i parametri disponibili nell'ordine:
+    1. phone (normalizzato)
+    2. phone (originale se diverso)
+    3. P.IVA
+    4. Ragione Sociale
+    5. lastName (fallback se form assente)
+    Restituisce lista di lead unici (deduplicati per ID).
+    """
+    seen_ids: set = set()
+    all_leads: list[dict] = []
+
+    def _add_leads(new_leads: list[dict], source: str) -> int:
+        added = 0
+        for lead in new_leads:
+            lid = str(lead.get("id") or "")
+            if lid and lid not in seen_ids:
+                seen_ids.add(lid)
+                all_leads.append(lead)
+                added += 1
+        if added:
+            logger.info("Sidial: +%d lead nuovi da ricerca per %s", added, source)
+        return added
+
+    norm_phone = _normalize_phone(phone)
+
+    # 1. Telefono normalizzato
+    leads = await _search_leads_by_phone(norm_phone)
+    _add_leads(leads, f"phone={norm_phone}")
+
+    # 2. Telefono originale (se diverso)
+    if norm_phone != phone and not leads:
+        leads2 = await _search_leads_by_phone(phone)
+        _add_leads(leads2, f"phone_orig={phone}")
+
+    # Form presente: cerca per P.IVA e Ragione Sociale
+    form_present = bool(piva or ragione_sociale)
+
+    if piva:
+        leads_piva = await _search_leads_by_piva(piva)
+        _add_leads(leads_piva, f"piva={piva}")
+
+    if ragione_sociale:
+        leads_rs = await _search_leads_by_ragione_sociale(ragione_sociale)
+        _add_leads(leads_rs, f"ragione_sociale={ragione_sociale}")
+
+    # Form assente: cerca per lastName come ricerca indipendente (non fallback)
+    if not form_present and last_name:
+        leads_ln = await _search_leads_by_ragione_sociale(last_name)
+        _add_leads(leads_ln, f"lastName={last_name}")
+
+    logger.info("Sidial: totale %d lead unici trovati", len(all_leads))
+    return all_leads
+
+
 async def find_and_download_all_recordings(
     phone: str,
     campaign_code: Optional[str] = None,
-    appointment_dt: Optional[datetime] = None,   # ignorato, mantenuto per compatibilità
-    lookback_days: int = 30,
+    appointment_dt: Optional[datetime] = None,
+    lookback_days: int = 90,
     max_recs: int = 20,
     piva: str = "",
+    ragione_sociale: str = "",
+    last_name: str = "",
 ) -> list[Tuple[str, bytes]]:
     """
-    Trova e scarica le registrazioni degli ultimi lookback_days giorni per un
-    numero di telefono.  L'obiettivo è analizzare le TELEFONATE fatte al cliente,
-    non la data dell'appuntamento Acuity.
+    Trova e scarica le registrazioni degli ultimi lookback_days giorni.
 
-    Flusso:
-      1. searchLeads → leadId(s) per il numero
-      2. searchRecs  → tutte le registrazioni del lead
-      3. filtra quelle negli ultimi lookback_days giorni (default 30)
-         → se nessuna cade nella finestra, usa solo la più recente disponibile
-         → al massimo max_recs registrazioni (le più recenti)
-      4. getLeadRec  → audio bytes per ognuna
+    Ordine di ricerca lead (come da istruzione):
+      1. phone_top_level (normalizzato + originale)
+      2. P.IVA (dal form field "PARTITA IVA*")
+      3. Ragione Sociale (dal form field "RAGIONE SOCIALE*")
+      4. lastName (fallback se form assente)
 
-    Restituisce lista di (rec_id, audio_bytes), ordine cronologico (più vecchia prima).
+    Per ogni parametro raccoglie i lead, deduplica per ID, poi raccoglie
+    tutte le registrazioni, deduplica per rec_id, conta e scarica.
     """
     from datetime import timedelta
 
     _log_config()
     norm_phone = _normalize_phone(phone)
-
     now_utc = datetime.now(tz=timezone.utc)
-    cutoff  = now_utc - timedelta(days=lookback_days)
+    cutoff = now_utc - timedelta(days=lookback_days)
 
     logger.info(
-        "Sidial: ricerca phone=%s (norm=%s) campaign=%s ultimi %d giorni (dal %s) max=%d",
-        phone, norm_phone, campaign_code, lookback_days,
-        cutoff.strftime("%Y-%m-%d"), max_recs,
+        "Sidial: ricerca multi-parametro — phone=%s piva=%s rs=%s ultimi %d giorni",
+        norm_phone, piva or "—", ragione_sociale or "—", lookback_days,
     )
 
-    # 1. Trova lead(s)
-    leads = await _search_leads_by_phone(norm_phone)
+    # ── FASE A: raccogli tutti i lead unici da tutti i parametri ─────────────
+    all_leads = await _collect_all_leads(
+        phone=phone, piva=piva,
+        ragione_sociale=ragione_sociale, last_name=last_name,
+    )
 
-    # Se numero normalizzato non trova nulla, prova con originale
-    if not leads and norm_phone != phone:
-        logger.info("Sidial: riprovo searchLeads con phone originale=%s", phone)
-        leads = await _search_leads_by_phone(phone)
-
-    # Fallback: cerca per P.IVA se il telefono non ha trovato nulla
-    if not leads and piva:
-        logger.info("Sidial: nessun lead per phone=%s — riprovo con P.IVA=%s", norm_phone, piva)
-        leads = await _search_leads_by_piva(piva)
-
-    if not leads:
-        logger.warning("Sidial: nessun lead per phone=%s%s", norm_phone,
-                       f" né per P.IVA={piva}" if piva else "")
+    if not all_leads:
+        logger.warning("Sidial: nessun lead trovato con nessun parametro")
         return []
 
-    # 2. Raccoglie tutte le registrazioni per ogni lead trovato
+    # ── FASE B: raccogli tutte le registrazioni, deduplica per rec_id ────────
+    seen_rec_ids: set = set()
     all_recs: list[dict] = []
-    for lead in leads:
+    for lead in all_leads:
         lead_id = str(lead.get("id") or "")
         if not lead_id:
             continue
         recs = await _search_recs_by_lead(lead_id)
         for r in recs:
-            r["_lead_id"] = lead_id
-        all_recs.extend(recs)
+            rid = str(r.get("id") or "")
+            if rid and rid not in seen_rec_ids:
+                seen_rec_ids.add(rid)
+                r["_lead_id"] = lead_id
+                all_recs.append(r)
 
     if not all_recs:
-        logger.warning(
-            "Sidial: nessuna registrazione per phone=%s (lead IDs: %s)",
-            norm_phone, [str(l.get("id")) for l in leads],
-        )
+        logger.warning("Sidial: nessuna registrazione per %d lead trovati", len(all_leads))
         return []
 
-    # 3. Ordina cronologicamente (dalla più vecchia alla più recente)
+    # ── FASE C: filtra per lookback_days, ordina cronologicamente ────────────
     def _sort_key(r: dict) -> datetime:
         dt = _parse_rec_datetime(r)
         return dt if dt else datetime.min.replace(tzinfo=timezone.utc)
 
     all_recs_sorted = sorted(all_recs, key=_sort_key)
-    logger.info(
-        "Sidial: %d registrazioni totali per phone=%s",
-        len(all_recs_sorted), norm_phone,
-    )
+    logger.info("Sidial: %d registrazioni uniche totali", len(all_recs_sorted))
 
-    # 4. Filtra: tieni solo quelle negli ultimi lookback_days giorni
     recent = [
         r for r in all_recs_sorted
         if (_parse_rec_datetime(r) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff
     ]
 
     if recent:
-        # Tutte le registrazioni recenti in ordine cronologico (più vecchia → più recente)
-        # Cap a max_recs come valvola di sicurezza (default 20)
         recs_to_download = recent[:max_recs]
         logger.info(
-            "Sidial: %d registrazioni negli ultimi %d giorni (su %d totali) — scarico tutte (%d)",
-            len(recent), lookback_days, len(all_recs_sorted), len(recs_to_download),
+            "Sidial: %d registrazioni negli ultimi %d giorni → scarico %d",
+            len(recent), lookback_days, len(recs_to_download),
         )
     else:
-        # Fallback: nessuna recente → usa solo la più recente in assoluto
         recs_to_download = all_recs_sorted[-1:]
-        logger.warning(
-            "Sidial: nessuna registrazione negli ultimi %d giorni per phone=%s — uso l'ultima disponibile",
-            lookback_days, norm_phone,
-        )
+        logger.warning("Sidial: nessuna registrazione recente — uso l'ultima disponibile")
 
-    # 5. Filtra registrazioni troppo corte (< 10s = puro ringback, nessun audio utile)
+    # ── FASE D: filtra ringback puri (< 10s), verifica converted ─────────────
     MIN_CALL_SECONDS = 10
     useful = [r for r in recs_to_download if int(r.get("callLength") or 0) >= MIN_CALL_SECONDS]
-    skipped_short = len(recs_to_download) - len(useful)
-    if skipped_short:
-        logger.info(
-            "Sidial: scartate %d registrazioni < %ds (ringback puro)",
-            skipped_short, MIN_CALL_SECONDS,
-        )
-    # Fallback: se il filtro ha eliminato tutto, usa tutte le registrazioni originali
     if not useful:
-        logger.warning("Sidial: filtro %ds ha eliminato tutto — uso tutte le registrazioni", MIN_CALL_SECONDS)
+        logger.warning("Sidial: filtro %ds ha eliminato tutto — uso tutte", MIN_CALL_SECONDS)
         useful = recs_to_download
 
-    # Controlla se ci sono registrazioni lunghe ancora in conversione (converted='n')
     pending_long = [
-        r for r in recs_to_download
-        if int(r.get("callLength") or 0) >= MIN_CALL_SECONDS
-        and (r.get("converted") or "n").lower() != "y"
+        r for r in useful
+        if (r.get("converted") or "n").lower() != "y"
+        and int(r.get("callLength") or 0) >= MIN_CALL_SECONDS
     ]
     if pending_long:
         logger.warning(
-            "Sidial: %d registrazioni utili ancora in conversione (converted=n): %s",
-            len(pending_long),
-            [r.get("id") for r in pending_long],
+            "Sidial: %d registrazioni utili ancora in conversione: %s",
+            len(pending_long), [r.get("id") for r in pending_long],
         )
 
-    # 6. Scarica solo le registrazioni utili e già convertite
+    logger.info(
+        "Sidial: RIEPILOGO — %d lead | %d rec totali | %d recenti | %d da scaricare | %d in conversione",
+        len(all_leads), len(all_recs_sorted), len(recent), len(useful), len(pending_long),
+    )
+
+    # ── FASE E: scarica ───────────────────────────────────────────────────────
     results: list[Tuple[str, bytes]] = []
     for rec in useful:
         rec_id = str(rec.get("id") or "")
         if not rec_id:
             continue
-        converted = (rec.get("converted") or "n").lower()
-        if converted != "y":
-            logger.info(
-                "Sidial: rec_id=%s callLength=%ss — ancora in conversione, skip.",
-                rec_id, rec.get("callLength"),
-            )
+        if (rec.get("converted") or "n").lower() != "y":
+            logger.info("Sidial: rec_id=%s callLength=%ss — in conversione, skip", rec_id, rec.get("callLength"))
             continue
-        logger.info("Sidial: tentativo download rec completo: %s", rec)
         audio_bytes = await _download_rec(rec_id, file_name=rec.get("fileName") or "")
         if audio_bytes:
             results.append((rec_id, audio_bytes))
         else:
             logger.warning("Sidial: nessun audio per rec_id=%s — skipping", rec_id)
 
-    logger.info(
-        "Sidial: %d/%d registrazioni scaricate per phone=%s%s",
-        len(results), len(useful), norm_phone,
-        f" ({len(pending_long)} in attesa conversione)" if pending_long else "",
-    )
-
-    # Se nessuna registrazione scaricata ma ci sono in attesa di conversione →
-    # restituisce lista vuota con flag speciale per segnalarlo al webhook
-    if not results and pending_long:
-        # Aggiungi un marker speciale come primo elemento vuoto
-        # Il webhook lo interpreterà come "registrazione in attesa, riprovare"
-        pass  # il webhook gestirà il caso "0 registrazioni" normalmente
-
+    logger.info("Sidial: %d/%d registrazioni scaricate", len(results), len(useful))
     return results
 
 

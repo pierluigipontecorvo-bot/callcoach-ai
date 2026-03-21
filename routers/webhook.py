@@ -269,6 +269,8 @@ async def run_analysis_pipeline(
                 campaign_code=campaign_info.get("raw"),
                 lookback_days=90,
                 piva=piva,
+                ragione_sociale=client_company,
+                last_name=appointment_data.get("lastName", ""),
             )
         except Exception as exc:
             msg = f"Sidial error: {exc}"
