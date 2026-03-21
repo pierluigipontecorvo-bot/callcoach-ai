@@ -79,6 +79,7 @@ class Analysis(Base):
     acuity_account = Column(Integer)
     acuity_label = Column(String(100))
     sidial_call_id = Column(String(100))
+    acuity_form_fields = Column(JSONB)      # tutti i form fields Acuity {nome: valore}
     transcript = Column(Text)
     qualification_level = Column(String(50))
     report_json = Column(JSONB)

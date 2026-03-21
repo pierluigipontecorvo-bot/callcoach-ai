@@ -83,6 +83,10 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS operator_email VARCHAR(200)",
         "analyses.operator_email",
     )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS acuity_form_fields JSONB",
+        "analyses.acuity_form_fields",
+    )
     await _run_sql("""
         UPDATE analyses
         SET processing_status = 'error', qualification_level = 'errore_tecnico',

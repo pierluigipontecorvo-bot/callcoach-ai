@@ -349,6 +349,30 @@ def extract_ragione_sociale(appointment_data: dict) -> str:
     return " ".join(p for p in parts if p).strip() or ""
 
 
+# ── Form fields extraction ────────────────────────────────────────────────────
+
+def extract_all_form_fields(appointment_data: dict) -> dict:
+    """
+    Estrae TUTTI i form fields dall'appuntamento Acuity come dizionario piatto
+    {field_name: value}. Usato per salvare nel DB e per future ricerche
+    (es. telefono diretto, P.IVA alternativa, note operatore).
+    Campi vuoti vengono inclusi ugualmente per tracciabilità.
+    """
+    fields: dict = {}
+    for form in (appointment_data.get("forms") or []):
+        for val in (form.get("values") or form.get("fields") or []):
+            name = (val.get("name") or val.get("label") or "").strip()
+            value = (val.get("value") or "")
+            if name:
+                fields[name] = value
+    for val in (appointment_data.get("fields") or []):
+        name = (val.get("name") or val.get("label") or "").strip()
+        value = (val.get("value") or "")
+        if name:
+            fields[name] = value
+    return fields
+
+
 # ── In-memory cache for list_appointments (avoids re-fetching on every page nav) ─
 
 _APPTS_CACHE: dict = {}

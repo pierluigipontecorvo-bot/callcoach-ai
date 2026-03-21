@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from services.acuity import (
     check_webhook_signature,
+    extract_all_form_fields,
     extract_phone,
     extract_piva,
     extract_ragione_sociale,
@@ -222,6 +223,19 @@ async def run_analysis_pipeline(
     operator_display = get_operator_display(appointment_data)
     logger.info("[%s] Operator: %s (email=%s)", appointment_id, operator_display, operator_email)
     logger.info("[%s] Phone=%s | P.IVA=%s", appointment_id, phone, piva)
+
+    # ── 4. Lettura e salvataggio form fields Acuity ───────────────────────────
+    await _update_progress(analysis_id, 8, "Lettura dati form Acuity...")
+    from database import AsyncSessionLocal
+    from models import Analysis
+    form_fields = extract_all_form_fields(appointment_data)
+    logger.info("[%s] Form fields: %d campi estratti: %s", appointment_id, len(form_fields), list(form_fields.keys()))
+    async with AsyncSessionLocal() as _sess:
+        _analysis = await _sess.get(Analysis, analysis_id)
+        if _analysis:
+            _analysis.acuity_form_fields = form_fields
+            await _sess.commit()
+    logger.info("[%s] Form fields salvati nel DB", appointment_id)
 
     # Save identifying info immediately so the UI shows it during processing
     _initial_op_name = operator_display
