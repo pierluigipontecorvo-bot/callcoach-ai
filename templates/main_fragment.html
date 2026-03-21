@@ -1,0 +1,147 @@
+{# Main table fragment — served at /admin/ui/appointments/data?v=3 #}
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0" style="font-size:13px;">
+      <thead>
+        <tr>
+          <th>Campagna / Cliente</th>
+          <th>Data preso</th>
+          <th>Operatore</th>
+          <th>Etichetta</th>
+          <th>Pipeline</th>
+          <th>Azioni</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in appointments %}
+        <tr data-appt-id="{{ a.id }}" {% if a.is_past %}style="opacity:.75;"{% endif %}>
+
+          {# ── Campagna / Cliente ─────────────────────────────────── #}
+          <td>
+            <div class="fw-semibold" style="font-size:12px; font-family:'Space Grotesk',sans-serif; line-height:1.3;">
+              {{ a.campaign_code or "—" }}
+            </div>
+            <div class="text-muted" style="font-size:11px; margin-top:2px;">
+              {{ a.ragione or "—" }}
+            </div>
+            {% if not a.campaign_cfg %}
+              <span class="badge bg-warning text-dark" style="font-size:9px;">
+                {% if a.campaign_inactive %}inattiva{% else %}non configurata{% endif %}
+              </span>
+            {% endif %}
+          </td>
+
+          {# ── Date ──────────────────────────────────────────────── #}
+          <td>
+            <div style="font-size:12px;">{{ a.created_display }}</div>
+            <div class="text-muted" style="font-size:11px;">App: {{ a.dt_display }}</div>
+            {% if a.analysis and a.analysis.num_recordings %}
+              <div style="font-size:10px; color:#708090; margin-top:2px;">
+                {{ a.analysis.num_recordings }} rec
+                {% if a.analysis.total_talk_seconds %}
+                  · {{ (a.analysis.total_talk_seconds // 60) }}m {{ (a.analysis.total_talk_seconds % 60) | int }}s
+                {% endif %}
+              </div>
+            {% endif %}
+          </td>
+
+          {# ── Operatore ─────────────────────────────────────────── #}
+          <td>
+            <span style="font-size:12px; font-family:'Space Grotesk',sans-serif;">{{ a.op_display }}</span>
+          </td>
+
+          {# ── Etichetta ─────────────────────────────────────────── #}
+          <td>
+            {% for lbl in a.labels %}
+              <span class="badge"
+                    style="font-size:10px; background:{% if lbl.color %}{{ lbl.color }}{% else %}#ccc{% endif %};
+                           color:#222; border:1px solid rgba(0,0,0,.1);">
+                {{ lbl.name }}
+              </span>
+            {% else %}
+              <span class="text-muted" style="font-size:11px;">—</span>
+            {% endfor %}
+          </td>
+
+          {# ── Pipeline status ───────────────────────────────────── #}
+          <td class="pipeline-status-cell" style="min-width:160px;">
+            {% if a.analysis %}
+              {% set ana = a.analysis %}
+              {% if ana.status == 'completed' %}
+                {% set ql = ana.qualification_level %}
+                {% if ql == 'eccellente' %}
+                  <span class="badge bg-success">Eccellente</span>
+                {% elif ql == 'buona' %}
+                  <span class="badge bg-primary">Buona</span>
+                {% elif ql == 'sufficiente' %}
+                  <span class="badge bg-info">Sufficiente</span>
+                {% elif ql == 'da_migliorare' %}
+                  <span class="badge bg-warning text-dark">Da migliorare</span>
+                {% elif ql == 'inaccurata' %}
+                  <span class="badge bg-danger">Inaccurata</span>
+                {% elif ql == 'non_in_target' %}
+                  <span class="badge bg-secondary">Non in target</span>
+                {% elif ql == 'errore_tecnico' %}
+                  <span class="badge bg-dark">Errore tecnico</span>
+                {% else %}
+                  <span class="badge bg-secondary">{{ ql or "—" }}</span>
+                {% endif %}
+                {# Show pipeline stop info if available #}
+                {% if ana.pipeline_steps %}
+                  {% set stopped = namespace(step=None) %}
+                  {% for k, v in ana.pipeline_steps.items() %}
+                    {% if v.status == 'stop' %}{% set stopped.step = k %}{% endif %}
+                  {% endfor %}
+                  {% if stopped.step %}
+                    <div style="font-size:10px; color:#dc3545; margin-top:2px;">
+                      Stop: {{ stopped.step }}
+                    </div>
+                  {% endif %}
+                {% endif %}
+              {% elif ana.status == 'error' %}
+                <span class="badge bg-danger">Errore</span>
+              {% elif ana.status in ('processing', 'pending') %}
+                <div class="progress" style="height:5px; margin-bottom:3px;">
+                  <div class="progress-bar progress-bar-striped progress-bar-animated"
+                       style="width:{{ ana.progress or 20 }}%"></div>
+                </div>
+                <span style="font-size:10px; color:#708090;">{{ ana.step_message or "In corso..." }}</span>
+              {% else %}
+                <span class="text-muted" style="font-size:11px;">{{ ana.status }}</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted" style="font-size:11px;">—</span>
+            {% endif %}
+          </td>
+
+          {# ── Azioni ────────────────────────────────────────────── #}
+          <td>
+            <div class="d-flex gap-1 flex-wrap">
+              {% if a.campaign_cfg %}
+                <button class="btn btn-sm btn-outline-secondary"
+                        style="font-size:11px; padding:2px 8px;"
+                        onclick="triggerAnalysis({{ a.account }}, '{{ a.id }}', '')">
+                  ▶ Analizza
+                </button>
+              {% endif %}
+              {% if a.analysis and a.analysis.id %}
+                <a href="/admin/ui/analyses/{{ a.analysis.id }}"
+                   class="btn btn-sm btn-outline-secondary"
+                   style="font-size:11px; padding:2px 8px;">
+                  Dettaglio
+                </a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-4" style="font-size:13px;">
+            Nessun appuntamento trovato negli ultimi 30 giorni.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

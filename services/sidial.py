@@ -427,7 +427,9 @@ async def find_and_download_all_recordings(
     piva: str = "",
     ragione_sociale: str = "",
     last_name: str = "",
-) -> list[Tuple[str, bytes]]:
+    min_call_seconds: int = 20,
+    return_stats: bool = False,
+) -> "list[Tuple[str, bytes]] | tuple[list[Tuple[str, bytes]], dict]":
     """
     Trova e scarica le registrazioni degli ultimi lookback_days giorni.
 
@@ -504,17 +506,18 @@ async def find_and_download_all_recordings(
         recs_to_download = all_recs_sorted[-1:]
         logger.warning("Sidial: nessuna registrazione recente — uso l'ultima disponibile")
 
-    # ── FASE D: filtra ringback puri (< 10s), verifica converted ─────────────
-    MIN_CALL_SECONDS = 10
-    useful = [r for r in recs_to_download if int(r.get("callLength") or 0) >= MIN_CALL_SECONDS]
+    # ── FASE D: filtra ringback puri, verifica converted ─────────────────────
+    _MIN_SEC = max(10, min_call_seconds)  # never filter below 10s absolute floor
+    useful = [r for r in recs_to_download if int(r.get("callLength") or 0) >= _MIN_SEC]
     if not useful:
-        logger.warning("Sidial: filtro %ds ha eliminato tutto — uso tutte", MIN_CALL_SECONDS)
+        logger.warning("Sidial: filtro %ds ha eliminato tutto — uso tutte", _MIN_SEC)
         useful = recs_to_download
 
+    # Track recordings still being converted (converted != 'y') with length >= threshold
     pending_long = [
         r for r in useful
         if (r.get("converted") or "n").lower() != "y"
-        and int(r.get("callLength") or 0) >= MIN_CALL_SECONDS
+        and int(r.get("callLength") or 0) >= _MIN_SEC
     ]
     if pending_long:
         logger.warning(
@@ -527,22 +530,52 @@ async def find_and_download_all_recordings(
         len(all_leads), len(all_recs_sorted), len(recent), len(useful), len(pending_long),
     )
 
+    # Count how many search params found leads
+    _phone_leads = len(await _search_leads_by_phone(_normalize_phone(phone))) if phone else 0
+    _piva_leads = len(await _search_leads_by_piva(piva)) if piva else 0
+    _rs_leads = len(await _search_leads_by_ragione_sociale(ragione_sociale)) if ragione_sociale else 0
+    search_params_used = sum([bool(_phone_leads), bool(_piva_leads), bool(_rs_leads)])
+
+    # Build stats dict
+    stats: dict = {
+        "leads_found": len(all_leads),
+        "total_recs": len(all_recs_sorted),
+        "recent_recs": len(recent),
+        "converting_recs": len(pending_long),
+        "total_seconds": 0,
+        "search_params_used": search_params_used,
+    }
+
     # ── FASE E: scarica ───────────────────────────────────────────────────────
     results: list[Tuple[str, bytes]] = []
+    total_secs = 0
     for rec in useful:
         rec_id = str(rec.get("id") or "")
         if not rec_id:
             continue
+        call_len = int(rec.get("callLength") or 0)
         if (rec.get("converted") or "n").lower() != "y":
             logger.info("Sidial: rec_id=%s callLength=%ss — in conversione, skip", rec_id, rec.get("callLength"))
             continue
         audio_bytes = await _download_rec(rec_id, file_name=rec.get("fileName") or "")
         if audio_bytes:
+            # Coherence check: bytes should be >= callLength_seconds * 500 (rough floor)
+            coherence_ok = len(audio_bytes) >= call_len * 500 if call_len > 0 else True
+            if not coherence_ok:
+                logger.warning(
+                    "Sidial: rec_id=%s INCOERENTE — bytes=%d callLength=%ds (atteso>=%d)",
+                    rec_id, len(audio_bytes), call_len, call_len * 500,
+                )
             results.append((rec_id, audio_bytes))
+            total_secs += call_len
         else:
             logger.warning("Sidial: nessun audio per rec_id=%s — skipping", rec_id)
 
-    logger.info("Sidial: %d/%d registrazioni scaricate", len(results), len(useful))
+    stats["total_seconds"] = total_secs
+    logger.info("Sidial: %d/%d registrazioni scaricate · %ds totale", len(results), len(useful), total_secs)
+
+    if return_stats:
+        return results, stats
     return results
 
 

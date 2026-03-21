@@ -87,6 +87,47 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS acuity_form_fields JSONB",
         "analyses.acuity_form_fields",
     )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS pipeline_steps JSONB DEFAULT '{}'",
+        "analyses.pipeline_steps",
+    )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS label_name VARCHAR(100)",
+        "analyses.label_name",
+    )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS label_color VARCHAR(50)",
+        "analyses.label_color",
+    )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS num_recordings INTEGER DEFAULT 0",
+        "analyses.num_recordings",
+    )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS total_talk_seconds INTEGER DEFAULT 0",
+        "analyses.total_talk_seconds",
+    )
+    await _run_sql("""CREATE TABLE IF NOT EXISTS operators (
+        id SERIAL PRIMARY KEY,
+        number VARCHAR(10) UNIQUE NOT NULL,
+        display_name VARCHAR(100),
+        email VARCHAR(200),
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    )""", "operators table")
+    await _run_sql("""CREATE TABLE IF NOT EXISTS settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT,
+        description TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+    )""", "settings table")
+    await _run_sql("""INSERT INTO settings (key, value, description) VALUES
+        ('transcription_engine', 'openai', 'Motore trascrizione default: openai o assemblyai'),
+        ('min_call_length_seconds', '20', 'Durata minima registrazione in secondi'),
+        ('sidial_lookback_days', '90', 'Giorni lookback registrazioni Sidial'),
+        ('sidial_retry_count', '5', 'Numero massimo retry download'),
+        ('sidial_retry_wait_seconds', '180', 'Attesa secondi tra retry')
+    ON CONFLICT (key) DO NOTHING""", "settings defaults")
     await _run_sql("""
         UPDATE analyses
         SET processing_status = 'error', qualification_level = 'errore_tecnico',

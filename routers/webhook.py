@@ -1,5 +1,21 @@
 """
 Acuity Scheduling webhook receiver + background analysis pipeline.
+
+14-step semaphore pipeline:
+  1  webhook     — received & validated
+  2  firma       — HMAC signature
+  3  acuity      — appointment fetched
+  4  form        — form fields extracted
+  5  etichetta   — label extracted
+  6  data        — appointment date parsed
+  7  campagna    — campaign identified
+  8  operatore   — operator identified
+  9  sidial      — lead(s) found on Sidial
+  10 download    — recordings downloaded
+  11 trascrizione — transcription
+  12 analisi     — AI analysis
+  13 salvataggio — saved to DB
+  14 email       — report sent
 """
 
 import asyncio
@@ -12,6 +28,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from services.acuity import (
     check_webhook_signature,
     extract_all_form_fields,
+    extract_form_fields,
+    extract_label,
     extract_phone,
     extract_piva,
     extract_ragione_sociale,
@@ -20,7 +38,7 @@ from services.acuity import (
     get_operator_display,
     should_analyze,
 )
-from services.ai_analysis import _extract_operator_name, analyze_call
+from services.ai_analysis import analyze_call
 from services.campaign_db import get_campaign_by_code
 from services.campaign_parser import parse_campaign_code
 from services.email_service import generate_html_report, send_analysis_report
@@ -32,10 +50,10 @@ router = APIRouter(prefix="/webhook", tags=["webhook"])
 logger = logging.getLogger(__name__)
 
 
-# ── DB helpers (imported lazily to avoid circular imports at module load) ──────
+# ── DB helpers ─────────────────────────────────────────────────────────────────
 
 async def _create_processing_record(appointment_id: str, acuity_account: int) -> int:
-    """Crea subito un record Analysis con status=processing e ritorna l'id."""
+    """Create an Analysis record with status=processing and return its id."""
     from database import AsyncSessionLocal
     from models import Analysis
 
@@ -46,6 +64,7 @@ async def _create_processing_record(appointment_id: str, acuity_account: int) ->
             processing_status="processing",
             progress=0,
             step_message="Avvio pipeline...",
+            pipeline_steps={},
         )
         session.add(obj)
         await session.commit()
@@ -71,7 +90,7 @@ async def _update_initial_info(
     operator_name: str,
     appointment_dt,
 ):
-    """Save identifying info as soon as it is known, so the UI can display it during processing."""
+    """Save identifying info early so UI can display it during processing."""
     from database import AsyncSessionLocal
     from models import Analysis
 
@@ -149,10 +168,6 @@ async def _save_error(analysis_id: int | None, appointment_id: str, error_msg: s
         await session.commit()
 
 
-# _get_campaign_config replaced by services.campaign_db.get_campaign_by_code
-# (longest-prefix matching: "INTER" covers all INTER-* campaigns)
-
-
 # ── Full pipeline ──────────────────────────────────────────────────────────────
 
 async def run_analysis_pipeline(
@@ -161,30 +176,29 @@ async def run_analysis_pipeline(
     engine_override: str | None = None,
 ):
     """
-    1. Parse campaign code
-    2. Find & download recording from Sidial
-    3. Transcribe with Whisper / AssemblyAI
-    4. Load campaign config from DB
-    5. Analyse with Claude
-    6. Generate HTML report
-    7. Send email
-    8. Save to DB
+    14-step analysis pipeline with semaphore status tracking.
 
     engine_override: if provided, bypasses both global and campaign engine settings.
     """
+    from services.pipeline import update_step, init_steps
+    from services.operator_service import identify_operator
+    from services.settings_service import get_setting
+    from database import AsyncSessionLocal
+    from models import Analysis
+    from sqlalchemy import select
+
     appointment_id = str(appointment_data.get("id", "unknown"))
     logger.info("[%s] Pipeline started (account=%d)", appointment_id, acuity_account)
 
-    # ── 0. Parse campaign code (pre-flight, before creating any DB record) ────
+    # ── 0. Parse campaign code — pre-flight before creating any DB record ─────
     appointment_type = appointment_data.get("type", "")
     campaign_info = parse_campaign_code(appointment_type)
 
     if not campaign_info.get("valid"):
-        logger.warning("[%s] Unparseable campaign code: %r — skip (no DB record)", appointment_id, appointment_type)
+        logger.warning("[%s] Unparseable campaign code: %r — skip", appointment_id, appointment_type)
         return
 
-    # ── 0b. Check campaign exists in DB — if not configured, skip silently ───
-    # (user requested: "se la campagna non è stata ancora creata non deve fare analisi")
+    # ── 0b. Check campaign exists in DB — silent skip if not configured ───────
     _campaign_pre = None
     try:
         _campaign_pre = await get_campaign_by_code(campaign_info["raw"])
@@ -193,52 +207,96 @@ async def run_analysis_pipeline(
 
     if _campaign_pre is None:
         logger.info(
-            "[%s] Campagna '%s' non configurata in DB — analisi saltata. "
-            "Configurare la campagna nell'admin prima di ri-analizzare.",
+            "[%s] Campagna '%s' non configurata in DB — analisi saltata.",
             appointment_id, campaign_info["raw"],
         )
-        return  # Silent skip — no processing record created
+        return
 
-    # ── Crea subito il record con status=processing (visibile nella UI) ───────
+    # ── Create analysis record immediately (visible in UI) ────────────────────
     analysis_id = await _create_processing_record(appointment_id, acuity_account)
+    await init_steps(analysis_id)
 
-    # ── 1. Campaign code already parsed above — update progress ──────────────
-    await _update_progress(analysis_id, 5, "Verifica codice campagna...")
+    # Mark steps 1-3 as ok (they happened before pipeline was invoked)
+    await update_step(analysis_id, 1, "ok", "Webhook ricevuto")
+    await update_step(analysis_id, 2, "ok", "Firma valida")
+    await update_step(analysis_id, 3, "ok", f"Appuntamento {appointment_id} recuperato da Acuity")
 
-    logger.info(
-        "[%s] Campaign: %s | operator: %s",
-        appointment_id,
-        campaign_info.get("raw"),
-        campaign_info.get("agente"),
-    )
+    # ── STEP 4: Extract and save form fields ──────────────────────────────────
+    await update_step(analysis_id, 4, "running", "Lettura form fields...")
+    form_fields = extract_form_fields(appointment_data)
+    logger.info("[%s] Form fields: %d campi: %s", appointment_id, len(form_fields), list(form_fields.keys()))
 
-    phone = extract_phone(appointment_data)
-    piva  = extract_piva(appointment_data)
+    # Extract P.IVA and Ragione Sociale from form fields
+    piva = None
+    ragione_sociale = None
+    for fname, fval in form_fields.items():
+        fl = fname.lower()
+        if any(kw in fl for kw in ("partita iva", "p.iva", "piva", " pi ")):
+            piva = str(fval).strip() if fval else None
+        if any(kw in fl for kw in ("ragione", "ragione sociale")):
+            ragione_sociale = str(fval).strip() if fval else None
+
+    # Fallback to existing extract functions
+    if not piva:
+        piva = extract_piva(appointment_data) or None
+    if not ragione_sociale:
+        ragione_sociale = extract_ragione_sociale(appointment_data) or None
+
+    # ── STEP 5: Extract label ─────────────────────────────────────────────────
+    await update_step(analysis_id, 5, "running", "Lettura etichetta...")
+    label_name, label_color = extract_label(appointment_data)
+
+    # Save form fields + label to DB
+    async with AsyncSessionLocal() as _sess:
+        async with _sess.begin():
+            _a = await _sess.get(Analysis, analysis_id)
+            if _a:
+                _a.acuity_form_fields = form_fields
+                _a.label_name = label_name or None
+                _a.label_color = label_color or None
+
+    if label_name:
+        await update_step(analysis_id, 5, "ok", f"Etichetta: {label_name} ({label_color})")
+    else:
+        await update_step(analysis_id, 5, "warning", "Nessuna etichetta sull'appuntamento")
+
+    if piva and ragione_sociale:
+        await update_step(analysis_id, 4, "ok", f"P.IVA: {piva} · Ragione Sociale: {ragione_sociale}")
+    elif piva or ragione_sociale:
+        await update_step(analysis_id, 4, "warning", f"Trovato solo: {'P.IVA' if piva else 'Ragione Sociale'}")
+    else:
+        await update_step(analysis_id, 4, "warning", "Nessun dato fiscale — uso fallback lastName")
+
+    # ── STEP 6: Parse appointment date ────────────────────────────────────────
+    await update_step(analysis_id, 6, "running", "Verifica data appuntamento...")
     appointment_dt_str = appointment_data.get("datetime", "")
     appointment_dt = parse_iso_datetime(appointment_dt_str) if appointment_dt_str else None
-    client_company = extract_ragione_sociale(appointment_data)
+    if appointment_dt:
+        await update_step(analysis_id, 6, "ok", f"Data: {appointment_dt.strftime('%d/%m/%Y %H:%M')}")
+    else:
+        await update_step(analysis_id, 6, "warning", "Data appuntamento non parseable")
 
-    # ── Operator: OPR. form field (primary) or op.XX.nome@effoncall.com (fallback) ──
-    operator_email = find_operator_email(appointment_data)
-    operator_display = get_operator_display(appointment_data)
-    logger.info("[%s] Operator: %s (email=%s)", appointment_id, operator_display, operator_email)
-    logger.info("[%s] Phone=%s | P.IVA=%s", appointment_id, phone, piva)
+    # ── STEP 7: Identify campaign ─────────────────────────────────────────────
+    await update_step(analysis_id, 7, "running", "Verifica campagna...")
+    # Reuse _campaign_pre already loaded above — refresh it
+    try:
+        _refreshed = await get_campaign_by_code(campaign_info["raw"])
+        if _refreshed is not None:
+            campaign_db = _refreshed
+        else:
+            campaign_db = _campaign_pre
+    except Exception as exc:
+        logger.warning("[%s] Could not refresh campaign: %s", appointment_id, exc)
+        campaign_db = _campaign_pre
 
-    # ── 4. Lettura e salvataggio form fields Acuity ───────────────────────────
-    await _update_progress(analysis_id, 8, "Lettura dati form Acuity...")
-    from database import AsyncSessionLocal
-    from models import Analysis
-    form_fields = extract_all_form_fields(appointment_data)
-    logger.info("[%s] Form fields: %d campi estratti: %s", appointment_id, len(form_fields), list(form_fields.keys()))
-    async with AsyncSessionLocal() as _sess:
-        _analysis = await _sess.get(Analysis, analysis_id)
-        if _analysis:
-            _analysis.acuity_form_fields = form_fields
-            await _sess.commit()
-    logger.info("[%s] Form fields salvati nel DB", appointment_id)
+    await update_step(analysis_id, 7, "ok", f"Campagna '{campaign_db.code}' trovata")
 
-    # Save identifying info immediately so the UI shows it during processing
-    _initial_op_name = operator_display
+    # ── Extract phone ─────────────────────────────────────────────────────────
+    phone = extract_phone(appointment_data)
+    last_name = appointment_data.get("lastName", "")
+
+    # Save initial info for UI display
+    _initial_op_name = get_operator_display(appointment_data)
     await _update_initial_info(
         analysis_id,
         campaign_code=campaign_info["raw"],
@@ -246,81 +304,156 @@ async def run_analysis_pipeline(
         appointment_dt=appointment_dt,
     )
 
-    # ── 2. Find & download ALL recordings for this contact ────────────────────
+    # ── STEP 8: Identify operator ─────────────────────────────────────────────
+    await update_step(analysis_id, 8, "running", "Identificazione operatore...")
+    email_field = find_operator_email(appointment_data) or appointment_data.get("email", "")
+    op_info = await identify_operator(email_field, form_fields)
+
+    operator_email = op_info["email"] or ""
+    operator_display = op_info["display_name"] or _initial_op_name
+
+    if op_info["warning"]:
+        await update_step(analysis_id, 8, "warning", op_info["warning"])
+    else:
+        await update_step(analysis_id, 8, "ok", f"Operatore #{op_info['number']} — {operator_display}")
+
+    # Save operator info
+    async with AsyncSessionLocal() as _sess:
+        async with _sess.begin():
+            _a = await _sess.get(Analysis, analysis_id)
+            if _a:
+                _a.operator_name = operator_display or None
+                _a.operator_email = operator_email or None
+                _a.client_phone = phone or None
+                _a.client_company = ragione_sociale or None
+                _a.appointment_datetime = appointment_dt
+                _a.campaign_code = campaign_info["raw"]
+
+    # ── Guard: phone required ─────────────────────────────────────────────────
     if not phone:
         msg = "Numero di telefono assente nell'appuntamento Acuity — impossibile cercare su Sidial"
         logger.error("[%s] %s", appointment_id, msg)
+        await update_step(analysis_id, 9, "stop", msg)
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
-    # Retry fino a 5 volte con 3 min di attesa — Sidial impiega tempo a convertire
-    import asyncio as _asyncio
-    _MAX_RETRIES   = 5
-    _RETRY_WAIT_S  = 180   # 3 minuti tra un tentativo e l'altro
-    recordings = []
-    for _attempt in range(1, _MAX_RETRIES + 1):
-        await _update_progress(
-            analysis_id, 10,
-            f"Ricerca registrazione su Sidial (tentativo {_attempt}/{_MAX_RETRIES})…",
+    # ── STEP 9: Search Sidial ─────────────────────────────────────────────────
+    await update_step(analysis_id, 9, "running", "Ricerca lead su Sidial...")
+
+    try:
+        lookback = int(await get_setting("sidial_lookback_days", "90"))
+        min_secs = int(await get_setting("min_call_length_seconds", "20"))
+        retry_count = int(await get_setting("sidial_retry_count", "5"))
+        retry_wait = int(await get_setting("sidial_retry_wait_seconds", "180"))
+    except Exception as exc:
+        logger.warning("[%s] Could not read settings: %s — using defaults", appointment_id, exc)
+        lookback, min_secs, retry_count, retry_wait = 90, 20, 5, 180
+
+    try:
+        recordings, sidial_stats = await find_and_download_all_recordings(
+            phone=phone,
+            campaign_code=campaign_info.get("raw"),
+            lookback_days=lookback,
+            piva=piva or "",
+            ragione_sociale=ragione_sociale or "",
+            last_name=last_name if not form_fields else "",
+            min_call_seconds=min_secs,
+            return_stats=True,
         )
-        try:
-            recordings = await find_and_download_all_recordings(
-                phone=phone,
-                campaign_code=campaign_info.get("raw"),
-                lookback_days=90,
-                piva=piva,
-                ragione_sociale=client_company,
-                last_name=appointment_data.get("lastName", ""),
-            )
-        except Exception as exc:
-            msg = f"Sidial error: {exc}"
-            logger.error("[%s] %s", appointment_id, msg, exc_info=True)
+    except Exception as exc:
+        msg = f"Errore Sidial: {exc}"
+        logger.error("[%s] %s", appointment_id, msg, exc_info=True)
+        await update_step(analysis_id, 9, "stop", msg)
+        await _save_error(analysis_id, appointment_id, msg, acuity_account)
+        return
+
+    stats_msg = (
+        f"{sidial_stats['leads_found']} lead · "
+        f"{sidial_stats['total_recs']} rec totali · "
+        f"{sidial_stats['recent_recs']} recenti · "
+        f"{sidial_stats['converting_recs']} in conversione"
+    )
+
+    if sidial_stats["leads_found"] == 0:
+        await update_step(analysis_id, 9, "stop", f"Nessun lead trovato — {stats_msg}")
+        await _save_error(analysis_id, appointment_id, "Nessun lead trovato su Sidial", acuity_account)
+        return
+    elif sidial_stats.get("search_params_used", 3) < 2:
+        await update_step(analysis_id, 9, "warning", f"Lead trovati con parametri parziali — {stats_msg}")
+    else:
+        await update_step(analysis_id, 9, "ok", stats_msg)
+
+    # ── STEP 10: Download recordings ──────────────────────────────────────────
+    await update_step(analysis_id, 10, "running", "Download registrazioni...")
+
+    if not recordings:
+        # Try to wait for converting recordings
+        if sidial_stats["converting_recs"] > 0:
+            for attempt in range(1, retry_count + 1):
+                await update_step(
+                    analysis_id, 10, "running",
+                    f"Registrazioni in conversione — attendo {retry_wait // 60} min "
+                    f"(tentativo {attempt}/{retry_count})",
+                )
+                await asyncio.sleep(retry_wait)
+
+                try:
+                    recordings, sidial_stats = await find_and_download_all_recordings(
+                        phone=phone,
+                        campaign_code=campaign_info.get("raw"),
+                        lookback_days=lookback,
+                        piva=piva or "",
+                        ragione_sociale=ragione_sociale or "",
+                        last_name=last_name if not form_fields else "",
+                        min_call_seconds=min_secs,
+                        return_stats=True,
+                    )
+                except Exception as exc:
+                    logger.warning("[%s] Retry %d/%d failed: %s", appointment_id, attempt, retry_count, exc)
+                    continue
+
+                if recordings:
+                    break
+
+        if not recordings:
+            msg = f"0 registrazioni scaricabili dopo tutti i tentativi · {stats_msg}"
+            await update_step(analysis_id, 10, "stop", msg,
+                              detail={"can_upload_audio": True, "can_upload_transcript": True})
             await _save_error(analysis_id, appointment_id, msg, acuity_account)
             return
 
-        if recordings:
-            break   # trovate — procedi
+    n_recs = len(recordings)
+    total_secs = sidial_stats.get("total_seconds", 0)
+    mins = total_secs // 60
+    secs = total_secs % 60
+    await update_step(analysis_id, 10, "ok", f"{n_recs} registrazioni · {mins}m {secs:02d}s parlato")
 
-        if _attempt < _MAX_RETRIES:
-            logger.warning(
-                "[%s] Tentativo %d/%d: 0 registrazioni scaricabili — attendo %ds prima di riprovare",
-                appointment_id, _attempt, _MAX_RETRIES, _RETRY_WAIT_S,
-            )
-            await _update_progress(
-                analysis_id, 10,
-                f"Registrazione in conversione su Sidial — riprovo tra {_RETRY_WAIT_S//60} min (tentativo {_attempt}/{_MAX_RETRIES})…",
-            )
-            await _asyncio.sleep(_RETRY_WAIT_S)
+    # Save recording stats
+    async with AsyncSessionLocal() as _sess:
+        async with _sess.begin():
+            _a = await _sess.get(Analysis, analysis_id)
+            if _a:
+                _a.num_recordings = n_recs
+                _a.total_talk_seconds = total_secs
+                _a.sidial_call_id = ",".join(rec_id for rec_id, _ in recordings)
 
-    if not recordings:
-        msg = (
-            f"Nessuna registrazione scaricabile per phone='{phone}' dopo {_MAX_RETRIES} tentativi "
-            f"(ultima verifica: registrazioni ancora in conversione su Sidial)"
-        )
-        logger.error("[%s] %s", appointment_id, msg)
-        await _save_error(analysis_id, appointment_id, msg, acuity_account)
-        return
+    # ── STEP 11: Transcription ────────────────────────────────────────────────
+    await update_step(analysis_id, 11, "running", "Trascrizione in corso...")
 
-    logger.info("[%s] %d registrazioni trovate", appointment_id, len(recordings))
-    await _update_progress(analysis_id, 20, f"{len(recordings)} registrazione/i trovata/e, trascrizione in corso...")
-
-    # ── 3. Transcribe all recordings and concatenate ───────────────────────────
-    # Determine transcription engine: override > campaign > global default
-    _engine = engine_override or (
-        campaign_db.transcription_engine
-        if _campaign_pre and _campaign_pre.transcription_engine
-        else None
-    )
+    _campaign_engine = campaign_db.transcription_engine if campaign_db.transcription_engine else None
+    global_engine = await get_setting("transcription_engine", "openai")
+    _engine = engine_override or _campaign_engine or global_engine
 
     transcript_parts = []
     for idx, (call_id, audio_bytes) in enumerate(recordings, start=1):
-        pct = 20 + int(40 * (idx - 1) / len(recordings))
-        await _update_progress(analysis_id, pct, f"Trascrizione chiamata {idx}/{len(recordings)}...")
+        await update_step(
+            analysis_id, 11, "running",
+            f"Trascrizione chiamata {idx}/{n_recs} (motore: {_engine})...",
+        )
         try:
             logger.info(
                 "[%s] Trascrizione chiamata %d/%d (call_id=%s, %d bytes, engine=%s) …",
-                appointment_id, idx, len(recordings), call_id, len(audio_bytes),
-                _engine or "global_default",
+                appointment_id, idx, n_recs, call_id, len(audio_bytes), _engine,
             )
             part = await transcribe_audio(audio_bytes, engine=_engine)
             transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n{part}")
@@ -332,58 +465,50 @@ async def run_analysis_pipeline(
     transcript = "\n\n".join(transcript_parts)
     logger.info("[%s] Trascrizione totale: %d caratteri", appointment_id, len(transcript))
 
-    # ── Pre-flight: trascrizione completamente non disponibile ────────────────
     _all_unavailable = all("[trascrizione non disponibile]" in p for p in transcript_parts)
     _too_short = len(transcript.replace("\n", "").strip()) < 80
+
     if _all_unavailable or _too_short:
-        logger.warning("[%s] Trascrizione illeggibile o assente — errore tecnico automatico", appointment_id)
-        from database import AsyncSessionLocal
-        from models import Analysis
-        from sqlalchemy.orm.attributes import flag_modified as _flag_mod
+        msg = f"Trascrizione troppo breve ({len(transcript)} char) — errore tecnico"
+        await update_step(analysis_id, 11, "stop", msg)
+        # Save transcript and mark as errore tecnico
         async with AsyncSessionLocal() as _sess:
-            _obj = await _sess.get(Analysis, analysis_id)
-            if _obj:
-                _obj.processing_status = "completed"
-                _obj.progress = 100
-                _obj.step_message = "Completata (errore tecnico)"
-                _obj.qualification_level = "errore_tecnico"
-                _obj.transcript = transcript
-                _obj.report_json = {
-                    "errore_tecnico": True,
-                    "qualificazione": {
-                        "rating": 1, "label": "INSUFFICIENTE",
-                        "fuori_parametro": False,
-                        "spiegazione": "Analisi non valida — errore tecnico di trascrizione. La registrazione non è stata trascritta correttamente.",
-                        "parametri_verificati": [], "parametri_mancanti": [],
-                    },
-                }
-                _flag_mod(_obj, "report_json")
-                await _sess.commit()
+            async with _sess.begin():
+                _obj = await _sess.get(Analysis, analysis_id)
+                if _obj:
+                    _obj.processing_status = "completed"
+                    _obj.progress = 100
+                    _obj.step_message = "Completata (errore tecnico)"
+                    _obj.qualification_level = "errore_tecnico"
+                    _obj.transcript = transcript
+                    _obj.report_json = {
+                        "errore_tecnico": True,
+                        "qualificazione": {
+                            "rating": 1, "label": "INSUFFICIENTE",
+                            "fuori_parametro": False,
+                            "spiegazione": "Analisi non valida — errore tecnico di trascrizione.",
+                            "parametri_verificati": [], "parametri_mancanti": [],
+                        },
+                    }
         return
 
-    # ── 4. Load campaign config + global documents ────────────────────────────
-    await _update_progress(analysis_id, 60, "Caricamento configurazione campagna...")
-    # Reuse _campaign_pre fetched in pre-flight (already confirmed not None)
-    campaign_db = _campaign_pre
-    try:
-        # Refresh in case the config changed since the pre-flight check
-        _refreshed = await get_campaign_by_code(campaign_info["raw"])
-        if _refreshed is not None:
-            campaign_db = _refreshed
-    except Exception as exc:
-        logger.warning("[%s] Could not refresh campaign config: %s — using pre-flight data", appointment_id, exc)
+    await update_step(analysis_id, 11, "ok", f"{len(transcript)} caratteri trascritti · motore: {_engine}")
 
-    campaign_script = campaign_db.script             if campaign_db else None
-    campaign_client = campaign_db.client_info        if campaign_db else None
-    # Qualificazione: SOLO dalla campagna specifica — mai generica o globale
-    campaign_qual   = campaign_db.qualification_params if campaign_db else None
+    # Save transcript
+    async with AsyncSessionLocal() as _sess:
+        async with _sess.begin():
+            _a = await _sess.get(Analysis, analysis_id)
+            if _a:
+                _a.transcript = transcript
 
-    # Documenti globali dalla nuova tabella global_documents
+    # ── STEP 12: AI Analysis ──────────────────────────────────────────────────
+    await update_step(analysis_id, 12, "running", "Analisi AI in corso...")
+
+    # Load global documents
     global_docs = []
     try:
         from sqlalchemy import select as sa_select
         from models import GlobalDocument
-        from database import AsyncSessionLocal
         async with AsyncSessionLocal() as _sess:
             _res = await _sess.execute(
                 sa_select(GlobalDocument)
@@ -397,9 +522,7 @@ async def run_analysis_pipeline(
     except Exception as exc:
         logger.warning("[%s] Could not load global_documents: %s", appointment_id, exc)
 
-    # ── 5. Claude analysis ────────────────────────────────────────────────────
-    await _update_progress(analysis_id, 65, "Analisi AI in corso...")
-
+    # Load prompt sections
     from services.prompt_db import get_prompt_sections
     prompt_sections = {}
     try:
@@ -407,27 +530,34 @@ async def run_analysis_pipeline(
     except Exception as exc:
         logger.warning("[%s] Could not load prompt sections: %s", appointment_id, exc)
 
-    try:
-        report = await analyze_call(
-            transcript=transcript,
-            campaign_info=campaign_info,
-            script=campaign_script,
-            qualification_params=campaign_qual,
-            client_info=campaign_client,
-            operator_email=operator_email,
-            prompt_sections=prompt_sections,
-            prompt_extra=campaign_db.prompt_extra if campaign_db else None,
-            global_docs=global_docs,
-        )
-    except Exception as exc:
-        msg = f"Claude analysis failed: {exc}"
-        logger.error("[%s] %s", appointment_id, msg, exc_info=True)
-        await _save_error(analysis_id, appointment_id, msg, acuity_account)
-        return
+    report = None
+    for attempt in range(1, 3):
+        try:
+            report = await analyze_call(
+                transcript=transcript,
+                campaign_info=campaign_info,
+                script=campaign_db.script,
+                qualification_params=campaign_db.qualification_params,
+                client_info=campaign_db.client_info,
+                operator_email=operator_email,
+                prompt_sections=prompt_sections,
+                prompt_extra=campaign_db.prompt_extra,
+                global_docs=global_docs,
+            )
+            break
+        except Exception as exc:
+            if attempt == 2:
+                msg = f"Analisi AI fallita dopo 2 tentativi: {exc}"
+                await update_step(analysis_id, 12, "stop", msg)
+                await _save_error(analysis_id, appointment_id, f"AI error: {exc}", acuity_account)
+                return
+            logger.warning("[%s] Analisi tentativo %d fallita: %s", appointment_id, attempt, exc)
 
-    # ── 6. Controllo errore tecnico rilevato da Claude ────────────────────────
+    # Handle errore_tecnico detected by Claude
     if report.get("errore_tecnico"):
-        logger.warning("[%s] Claude ha rilevato trascrizione illeggibile — errore tecnico automatico", appointment_id)
+        logger.warning("[%s] Claude ha rilevato trascrizione illeggibile", appointment_id)
+        qualification_level = "errore_tecnico"
+        await update_step(analysis_id, 12, "ok", "Qualifica: errore_tecnico (rilevato da AI)")
         await _save_analysis(
             analysis_id=analysis_id,
             appointment_id=appointment_id,
@@ -438,27 +568,18 @@ async def run_analysis_pipeline(
             acuity_account=acuity_account,
             appointment_dt=appointment_dt,
             phone=phone,
-            client_company=client_company,
+            client_company=ragione_sociale,
             sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
             operator_name=operator_display,
             operator_email=operator_email,
-            qualification_level="errore_tecnico",
+            qualification_level=qualification_level,
             email_sent=False,
         )
+        await update_step(analysis_id, 13, "ok", "Salvato come errore tecnico")
+        await update_step(analysis_id, 14, "ok", "Nessuna email — errore tecnico")
         return
 
-    # ── 7. HTML report ────────────────────────────────────────────────────────
-    await _update_progress(analysis_id, 85, "Generazione report HTML...")
-    appointment_info = {
-        "datetime": appointment_data.get("datetime", ""),
-        "phone": phone,
-        "id": appointment_id,
-    }
-    html_report = generate_html_report(report, appointment_info, campaign_info, operator_name=operator_display, client_company=client_company, n_recordings=len(recordings))
-
-    # ── 8. Email ──────────────────────────────────────────────────────────────
-    from config import settings as cfg
-
+    # Determine qualification level
     _rating_to_level = {
         1: "inaccurata", 2: "da_migliorare", 3: "sufficiente", 4: "buona", 5: "eccellente"
     }
@@ -469,65 +590,100 @@ async def run_analysis_pipeline(
     else:
         qualification_level = _rating_to_level.get(qual_rating, "da_migliorare")
 
-    _INOLTRO = "inoltro@effoncall.com"
-    _email_disabled    = bool(campaign_db and campaign_db.email_disabled)
+    await update_step(analysis_id, 12, "ok", f"Qualifica: {qualification_level}")
+
+    # ── STEP 13: Save result ──────────────────────────────────────────────────
+    await update_step(analysis_id, 13, "running", "Salvataggio...")
+
+    # Generate HTML report
+    appointment_info = {
+        "datetime": appointment_data.get("datetime", ""),
+        "phone": phone,
+        "id": appointment_id,
+    }
+    html_report = generate_html_report(
+        report, appointment_info, campaign_info,
+        operator_name=operator_display,
+        client_company=ragione_sociale,
+        n_recordings=n_recs,
+    )
+
+    for attempt in range(1, 4):
+        try:
+            await _save_analysis(
+                analysis_id=analysis_id,
+                appointment_id=appointment_id,
+                campaign_code=campaign_info["raw"],
+                transcript=transcript,
+                report=report,
+                html_report=html_report,
+                acuity_account=acuity_account,
+                appointment_dt=appointment_dt,
+                phone=phone,
+                client_company=ragione_sociale,
+                sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
+                operator_name=operator_display,
+                operator_email=operator_email,
+                qualification_level=qualification_level,
+                email_sent=False,
+            )
+            await update_step(analysis_id, 13, "ok", "Risultato salvato")
+            break
+        except Exception as exc:
+            if attempt == 3:
+                logger.critical("[%s] Salvataggio fallito dopo 3 tentativi: %s", appointment_id, exc)
+                await update_step(analysis_id, 13, "stop", f"Errore DB: {exc}")
+                return
+            logger.warning("[%s] Salvataggio tentativo %d fallito: %s", appointment_id, attempt, exc)
+
+    # ── STEP 14: Send email ───────────────────────────────────────────────────
+    await update_step(analysis_id, 14, "running", "Invio email...")
+
+    from config import settings as cfg
+
+    _email_disabled = bool(campaign_db and campaign_db.email_disabled)
     _email_no_operator = bool(campaign_db and campaign_db.email_no_operator)
+    _INOLTRO = "inoltro@effoncall.com"
+
+    if _email_disabled:
+        await update_step(analysis_id, 14, "ok", "Email disabilitata per questa campagna")
+        return
+
+    if qualification_level in ("non_in_target", "errore_tecnico"):
+        await update_step(analysis_id, 14, "ok", f"Nessuna email — qualifica: {qualification_level}")
+        return
 
     recipients: list[str] = []
-    if not _email_disabled:
-        if campaign_db and campaign_db.email_recipients:
-            recipients = list(campaign_db.email_recipients)
-        if not recipients:
-            recipients = [cfg.fallback_email]
-        if operator_email and not _email_no_operator and operator_email not in recipients:
-            recipients.insert(0, operator_email)
-        if _INOLTRO not in recipients:
-            recipients.append(_INOLTRO)
+    if campaign_db and campaign_db.email_recipients:
+        recipients = list(campaign_db.email_recipients)
+    if not recipients:
+        recipients = [cfg.fallback_email]
+    if operator_email and not _email_no_operator and operator_email not in recipients:
+        recipients.insert(0, operator_email)
+    if _INOLTRO not in recipients:
+        recipients.append(_INOLTRO)
 
-    # ── 8b. Invia email report ────────────────────────────────────────────────
-    email_sent = False
-    # Non inviare se: campagna disabilitata, NON IN TARGET, errore tecnico
-    if not _email_disabled and qualification_level not in ("non_in_target", "errore_tecnico"):
-        try:
-            await _update_progress(analysis_id, 90, "Invio email report...")
-            await send_analysis_report(
-                recipients=recipients,
-                html_content=html_report,
-                operator_name=operator_display,
-                qualification_level=qualification_level,
-                appointment_datetime=appointment_data.get("datetime", ""),
-            )
-            email_sent = True
-            logger.info("[%s] Email inviata a %s", appointment_id, recipients)
-        except Exception as exc:
-            logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
-
-    # ── 9. Save to DB ─────────────────────────────────────────────────────────
-    await _update_progress(analysis_id, 95, "Salvataggio...")
     try:
-        operator_name_db = operator_display
-
-        await _save_analysis(
-            analysis_id=analysis_id,
-            appointment_id=appointment_id,
-            campaign_code=campaign_info["raw"],
-            transcript=transcript,
-            report=report,
-            html_report=html_report,
-            acuity_account=acuity_account,
-            appointment_dt=appointment_dt,
-            phone=phone,
-            client_company=client_company,
-            sidial_call_id=",".join(rec_id for rec_id, _ in recordings),
-            operator_name=operator_name_db,
-            operator_email=operator_email,
+        await send_analysis_report(
+            recipients=recipients,
+            html_content=html_report,
+            operator_name=operator_display,
             qualification_level=qualification_level,
-            email_sent=email_sent,
+            appointment_datetime=appointment_data.get("datetime", ""),
         )
+        # Mark email_sent in DB
+        async with AsyncSessionLocal() as _sess:
+            async with _sess.begin():
+                _a = await _sess.get(Analysis, analysis_id)
+                if _a:
+                    _a.email_sent = True
+        await update_step(analysis_id, 14, "ok", f"Email inviata a: {', '.join(recipients)}")
+        logger.info("[%s] Email inviata a %s", appointment_id, recipients)
     except Exception as exc:
-        logger.error("[%s] DB save failed: %s", appointment_id, exc, exc_info=True)
+        logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
+        await update_step(analysis_id, 14, "warning", f"Errore invio email: {exc}")
 
-    logger.info("[%s] Pipeline completed successfully.", appointment_id)
+    logger.info("[%s] Pipeline completata — qualifica: %s", appointment_id, qualification_level)
 
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
@@ -573,9 +729,7 @@ async def acuity_webhook(
 
     logger.info(
         "Acuity webhook account=%d action=%s appointment_id=%s",
-        account_id,
-        action,
-        appointment_id,
+        account_id, action, appointment_id,
     )
 
     if not appointment_id:

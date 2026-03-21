@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Impostazioni — CallCoach Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="fw-bold mb-0">Impostazioni sistema</h4>
+</div>
+
+<!-- ── Settings table ───────────────────────────────────────────────── -->
+<div class="card mb-4">
+  <div class="card-header">Parametri pipeline</div>
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Chiave</th>
+          <th>Descrizione</th>
+          <th>Valore attuale</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in all_settings %}
+        <tr>
+          <td><code>{{ s.key }}</code></td>
+          <td style="font-size:12px; color:#708090;">{{ s.description or "—" }}</td>
+          <td>
+            <form method="post" action="/admin/ui/settings/update" class="d-flex gap-2 align-items-center">
+              <input type="hidden" name="key" value="{{ s.key }}">
+              <input type="text" name="value" value="{{ s.value or '' }}"
+                     class="form-control form-control-sm" style="max-width:200px;">
+              <button type="submit" class="btn btn-sm btn-dark">Salva</button>
+            </form>
+          </td>
+          <td></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-muted text-center py-3">Nessuna impostazione trovata.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Operators table ──────────────────────────────────────────────── -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Operatori</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('new-op-form').classList.toggle('d-none')">
+      + Aggiungi
+    </button>
+  </div>
+  <div class="card-body" id="new-op-form" class="d-none" style="display:none!important;">
+    <form method="post" action="/admin/ui/settings/operators/save" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label">Numero (XX)</label>
+        <input type="text" name="number" class="form-control form-control-sm" placeholder="71" style="width:80px;" required>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Nome display</label>
+        <input type="text" name="display_name" class="form-control form-control-sm" placeholder="STEFANIA M.">
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Email</label>
+        <input type="email" name="email" class="form-control form-control-sm" placeholder="op.71.stefania@effoncall.com">
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-sm btn-dark">Salva operatore</button>
+      </div>
+    </form>
+  </div>
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Numero</th>
+          <th>Nome display</th>
+          <th>Email</th>
+          <th>Modifica</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for op in operators %}
+        <tr>
+          <td class="text-muted" style="font-size:12px;">{{ op.id }}</td>
+          <td><code>{{ op.number }}</code></td>
+          <td>{{ op.display_name or "—" }}</td>
+          <td style="font-size:12px;">{{ op.email or "—" }}</td>
+          <td>
+            <form method="post" action="/admin/ui/settings/operators/save" class="d-flex gap-2 align-items-center">
+              <input type="hidden" name="number" value="{{ op.number }}">
+              <input type="text" name="display_name" value="{{ op.display_name or '' }}"
+                     class="form-control form-control-sm" style="max-width:150px;" placeholder="Nome">
+              <input type="email" name="email" value="{{ op.email or '' }}"
+                     class="form-control form-control-sm" style="max-width:260px;" placeholder="Email">
+              <button type="submit" class="btn btn-sm btn-outline-secondary">Aggiorna</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-muted text-center py-3">Nessun operatore configurato.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('new-op-form').classList.remove('d-none');
+// Hide by default, toggle on button click
+document.getElementById('new-op-form').style.display = 'none';
+document.querySelector('[onclick*="new-op-form"]').addEventListener('click', function() {
+  var f = document.getElementById('new-op-form');
+  f.style.display = f.style.display === 'none' ? 'block' : 'none';
+});
+</script>
+{% endblock %}

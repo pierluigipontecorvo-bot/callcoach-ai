@@ -368,7 +368,27 @@ def extract_ragione_sociale(appointment_data: dict) -> str:
     return " ".join(p for p in parts if p).strip() or ""
 
 
+# ── Label extraction ──────────────────────────────────────────────────────────
+
+def extract_label(appointment_data: dict) -> tuple:
+    """
+    Return (label_name, label_color) from the first label in the appointment,
+    or ("", "") if no labels are present.
+    """
+    labels = appointment_data.get("labels") or []
+    if labels:
+        first = labels[0]
+        return (first.get("name") or "", first.get("color") or "")
+    return ("", "")
+
+
 # ── Form fields extraction ────────────────────────────────────────────────────
+
+# Alias for backward compatibility
+def extract_form_fields(appointment_data: dict) -> dict:
+    """Alias for extract_all_form_fields — used by new pipeline code."""
+    return extract_all_form_fields(appointment_data)
+
 
 def extract_all_form_fields(appointment_data: dict) -> dict:
     """

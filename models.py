@@ -59,10 +59,20 @@ class Operator(Base):
     __tablename__ = "operators"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(100), nullable=False)
-    email = Column(String(200))
+    number = Column(String(10), unique=True, nullable=False)  # XX (e.g. "71")
+    display_name = Column(String(100))   # e.g. "STEFANIA M."
+    email = Column(String(200))          # e.g. op.71.stefania@effoncall.com
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(Text)
+    description = Column(Text)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class Analysis(Base):
@@ -80,6 +90,11 @@ class Analysis(Base):
     acuity_label = Column(String(100))
     sidial_call_id = Column(String(100))
     acuity_form_fields = Column(JSONB)      # tutti i form fields Acuity {nome: valore}
+    label_name = Column(String(100))        # e.g. "PRESO"
+    label_color = Column(String(50))        # e.g. "cream"
+    pipeline_steps = Column(JSONB, default=dict)   # 14-step status tracking
+    num_recordings = Column(Integer, default=0)
+    total_talk_seconds = Column(Integer, default=0)
     transcript = Column(Text)
     qualification_level = Column(String(50))
     report_json = Column(JSONB)

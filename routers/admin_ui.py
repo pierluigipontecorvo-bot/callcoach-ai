@@ -983,7 +983,9 @@ async def appointments_data(
         ana_result = await db.execute(
             select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
                    Analysis.progress, Analysis.step_message, Analysis.created_at,
-                   Analysis.qualification_level)
+                   Analysis.qualification_level, Analysis.pipeline_steps,
+                   Analysis.num_recordings, Analysis.total_talk_seconds,
+                   Analysis.label_name, Analysis.label_color)
             .where(Analysis.appointment_id.in_(appt_ids))
         )
         analyses_map: dict[str, dict] = {
@@ -995,6 +997,11 @@ async def appointments_data(
                 "created_at": row.created_at,
                 "created_display": row.created_at.strftime("%d/%m/%Y %H:%M") if row.created_at else "—",
                 "qualification_level": row.qualification_level or "",
+                "pipeline_steps": row.pipeline_steps or {},
+                "num_recordings": row.num_recordings or 0,
+                "total_talk_seconds": row.total_talk_seconds or 0,
+                "label_name": row.label_name or "",
+                "label_color": row.label_color or "",
             }
             for row in ana_result.all()
         }
@@ -1131,11 +1138,13 @@ async def appointments_data(
         if e["campaign_code"] and e["campaign_code"] not in ("—", "")
     })
 
-    _tmpl = (
-        "appointments_v2_fragment.html"
-        if request.query_params.get("v") == "2"
-        else "appointments_table_fragment.html"
-    )
+    _v = request.query_params.get("v", "1")
+    if _v == "3":
+        _tmpl = "main_fragment.html"
+    elif _v == "2":
+        _tmpl = "appointments_v2_fragment.html"
+    else:
+        _tmpl = "appointments_table_fragment.html"
     return templates.TemplateResponse(
         _tmpl,
         {
@@ -1676,3 +1685,135 @@ def _form_snapshot(local_vars: dict) -> dict:
     keys = ("code", "nome", "script", "qualification_params",
             "client_info", "email_recipients_raw", "notes", "active")
     return {k: local_vars.get(k, "") for k in keys}
+
+
+# ── Settings page ─────────────────────────────────────────────────────────────
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
+    if not _is_admin(request):
+        return _login_redirect()
+    from models import Setting, Operator as OperatorModel
+    settings_result = await db.execute(select(Setting).order_by(Setting.key))
+    all_settings = settings_result.scalars().all()
+    operators_result = await db.execute(
+        select(OperatorModel).where(OperatorModel.active == True).order_by(OperatorModel.number)
+    )
+    operators = operators_result.scalars().all()
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            "request": request,
+            "active_page": "settings",
+            "all_settings": all_settings,
+            "operators": operators,
+            "flash_ok": request.query_params.get("ok", ""),
+            "flash_err": request.query_params.get("err", ""),
+        },
+    )
+
+
+@router.post("/settings/update")
+async def update_setting_value(
+    request: Request,
+    key: str = Form(...),
+    value: str = Form(...),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+    from services.settings_service import set_setting
+    await set_setting(key.strip(), value.strip())
+    from urllib.parse import quote
+    return RedirectResponse(
+        url=f"/admin/ui/settings?ok={quote(f'Impostazione {key!r} aggiornata.')}",
+        status_code=303,
+    )
+
+
+@router.get("/settings/operators", response_class=JSONResponse)
+async def list_operators(request: Request, db: AsyncSession = Depends(get_db)):
+    if not _is_admin(request):
+        return JSONResponse({"error": "non autorizzato"}, status_code=403)
+    from models import Operator as OperatorModel
+    result = await db.execute(select(OperatorModel).order_by(OperatorModel.number))
+    ops = result.scalars().all()
+    return JSONResponse([
+        {
+            "id": o.id, "number": o.number,
+            "display_name": o.display_name,
+            "email": o.email,
+            "active": o.active,
+        }
+        for o in ops
+    ])
+
+
+@router.post("/settings/operators/save")
+async def save_operator(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    number: str = Form(...),
+    display_name: str = Form(""),
+    email: str = Form(""),
+):
+    if not _is_admin(request):
+        return _login_redirect()
+    from models import Operator as OperatorModel
+    number = number.strip()
+    existing = await db.execute(
+        select(OperatorModel).where(OperatorModel.number == number)
+    )
+    op = existing.scalar_one_or_none()
+    if op:
+        op.display_name = display_name.strip() or None
+        op.email = email.strip() or None
+        op.active = True
+    else:
+        db.add(OperatorModel(
+            number=number,
+            display_name=display_name.strip() or None,
+            email=email.strip() or None,
+        ))
+    await db.commit()
+    from urllib.parse import quote
+    return RedirectResponse(
+        url=f"/admin/ui/settings?ok={quote(f'Operatore #{number} salvato.')}",
+        status_code=303,
+    )
+
+
+# ── Pipeline steps endpoint ───────────────────────────────────────────────────
+
+@router.get("/analyses/{analysis_id}/pipeline-steps", response_class=JSONResponse)
+async def get_pipeline_steps(
+    analysis_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return pipeline_steps JSON for an analysis (for polling UI)."""
+    if not _is_admin(request):
+        return JSONResponse({"error": "non autorizzato"}, status_code=403)
+    result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        return JSONResponse({"error": "analisi non trovata"}, status_code=404)
+    return JSONResponse({
+        "id": analysis_id,
+        "processing_status": analysis.processing_status,
+        "qualification_level": analysis.qualification_level or "",
+        "pipeline_steps": analysis.pipeline_steps or {},
+        "progress": analysis.progress or 0,
+        "step_message": analysis.step_message or "",
+    })
+
+
+# ── Main page (unified view) ──────────────────────────────────────────────────
+
+@router.get("/main", response_class=HTMLResponse)
+async def main_page(request: Request):
+    if not _is_admin(request):
+        return _login_redirect()
+    return templates.TemplateResponse(
+        "main.html",
+        {"request": request, "active_page": "main"},
+    )

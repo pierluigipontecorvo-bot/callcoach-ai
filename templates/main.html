@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Main — CallCoach Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="fw-bold mb-0">Appuntamenti &amp; Pipeline</h4>
+  <div class="d-flex gap-2 align-items-center">
+    <button id="btn-refresh" class="btn btn-sm btn-outline-secondary" onclick="loadData(true)">
+      ↺ Aggiorna
+    </button>
+    <span id="last-updated" style="font-size:11px; color:#708090;"></span>
+  </div>
+</div>
+
+<!-- ── Table container ─────────────────────────────────────────────── -->
+<div id="main-table-container">
+  <div class="text-center py-5 text-muted" style="font-size:13px;">
+    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+    Caricamento appuntamenti...
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var _pollTimer = null;
+var _hasProcessing = false;
+
+function loadData(forceRefresh) {
+  var url = '/admin/ui/appointments/data?v=3' + (forceRefresh ? '&refresh=1' : '');
+  document.getElementById('btn-refresh').disabled = true;
+  fetch(url)
+    .then(function(r) { return r.text(); })
+    .then(function(html) {
+      document.getElementById('main-table-container').innerHTML = html;
+      var now = new Date();
+      document.getElementById('last-updated').textContent =
+        'Aggiornato alle ' + now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0');
+      document.getElementById('btn-refresh').disabled = false;
+      schedulePolling();
+    })
+    .catch(function(err) {
+      document.getElementById('btn-refresh').disabled = false;
+      console.error('loadData error', err);
+    });
+}
+
+function schedulePolling() {
+  if (_pollTimer) clearTimeout(_pollTimer);
+  // Poll every 8 seconds for in-progress analyses
+  _pollTimer = setTimeout(pollStatus, 8000);
+}
+
+function pollStatus() {
+  fetch('/admin/ui/appointments/status-poll')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      _hasProcessing = data.has_processing;
+      data.items.forEach(function(item) {
+        updateRowStatus(item);
+      });
+      if (_hasProcessing) {
+        schedulePolling();
+      }
+    })
+    .catch(function() {
+      if (_hasProcessing) schedulePolling();
+    });
+}
+
+function updateRowStatus(item) {
+  // Update pipeline progress badge in the row
+  var cell = document.querySelector('[data-appt-id="' + item.appt_id + '"] .pipeline-status-cell');
+  if (!cell) return;
+
+  var pct = item.progress || 0;
+  var msg = item.step_message || '';
+  var status = item.status;
+
+  if (status === 'completed') {
+    var ql = item.qualification_level || '';
+    cell.innerHTML = '<span class="badge ' + qualBadgeClass(ql) + '">' + qualLabel(ql) + '</span>';
+  } else if (status === 'error') {
+    cell.innerHTML = '<span class="badge bg-danger">Errore</span>';
+  } else {
+    cell.innerHTML = (
+      '<div class="progress" style="height:6px; margin-bottom:4px;">' +
+      '<div class="progress-bar" style="width:' + pct + '%"></div>' +
+      '</div>' +
+      '<span style="font-size:10px; color:#708090;">' + (msg || 'In corso...') + '</span>'
+    );
+  }
+}
+
+function qualBadgeClass(ql) {
+  var map = {
+    'eccellente': 'bg-success', 'buona': 'bg-primary',
+    'sufficiente': 'bg-info', 'da_migliorare': 'bg-warning text-dark',
+    'inaccurata': 'bg-danger', 'non_in_target': 'bg-secondary',
+    'errore_tecnico': 'bg-dark',
+  };
+  return map[ql] || 'bg-secondary';
+}
+
+function qualLabel(ql) {
+  var map = {
+    'eccellente': 'Eccellente', 'buona': 'Buona',
+    'sufficiente': 'Sufficiente', 'da_migliorare': 'Da migliorare',
+    'inaccurata': 'Inaccurata', 'non_in_target': 'Non in target',
+    'errore_tecnico': 'Errore tecnico',
+  };
+  return map[ql] || ql;
+}
+
+function triggerAnalysis(accountId, appointmentId, engine) {
+  if (!confirm('Avviare l\'analisi per questo appuntamento?')) return;
+  var url = '/admin/ui/appointments/' + accountId + '/' + appointmentId + '/analyze';
+  if (engine) url += '?engine=' + encodeURIComponent(engine);
+  fetch(url, { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        alert('Analisi avviata.');
+        setTimeout(function() { loadData(false); }, 2000);
+      } else {
+        alert('Errore: ' + (data.error || 'sconosciuto'));
+      }
+    });
+}
+
+// Initial load
+loadData(false);
+</script>
+{% endblock %}
