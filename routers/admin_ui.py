@@ -1111,6 +1111,7 @@ async def appointments_data(
             "account": a["_account"],
             "dt_display": dt_display,
             "created_display": created_display,
+            "_created_date_obj": _created_date,   # date object for period filtering
             "campaign_code": campaign_code or a.get("type", "—"),
             "raw_acuity_type": a.get("type", ""),   # exact string from Acuity API
             "campaign_cfg": campaign_cfg,
@@ -1122,6 +1123,45 @@ async def appointments_data(
             "date_group": date_group,   # future | today | yesterday | past | other
             "analysis": analyses_map.get(appt_id),
         })
+
+    # ── Period filter (only for v=3 main page) ────────────────────────────
+    _period = request.query_params.get("period", "all")
+    _date_from_str = request.query_params.get("date_from", "")
+    _date_to_str   = request.query_params.get("date_to", "")
+
+    if _period != "all":
+        from datetime import date as _date_cls, timedelta as _td
+        _today = now.date()
+        _yest  = _today - timedelta(days=1)
+        _week_start = _today - timedelta(days=_today.weekday())   # Monday
+        _month_start = _today.replace(day=1)
+
+        def _in_period(item) -> bool:
+            _cd = item.get("_created_date_obj")
+            if _cd is None:
+                return _period == "all"
+            if _period == "today":
+                return _cd == _today
+            elif _period == "yesterday":
+                return _cd == _yest
+            elif _period == "week":
+                return _cd >= _week_start
+            elif _period == "month":
+                return _cd >= _month_start
+            elif _period == "custom":
+                try:
+                    _df = _date_cls.fromisoformat(_date_from_str) if _date_from_str else None
+                    _dt = _date_cls.fromisoformat(_date_to_str)   if _date_to_str   else None
+                except ValueError:
+                    return True
+                if _df and _cd < _df:
+                    return False
+                if _dt and _cd > _dt:
+                    return False
+                return True
+            return True
+
+        enriched = [e for e in enriched if _in_period(e)]
 
     has_processing = any(
         a.get("analysis") and a["analysis"]["status"] == "processing"
@@ -1153,6 +1193,7 @@ async def appointments_data(
             "has_processing": has_processing,
             "unique_operators": unique_operators,
             "unique_campaigns": unique_campaigns,
+            "period": _period,
         },
     )
 
@@ -1693,13 +1734,67 @@ def _form_snapshot(local_vars: dict) -> dict:
 async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
     if not _is_admin(request):
         return _login_redirect()
+
     from models import Setting, Operator as OperatorModel
-    settings_result = await db.execute(select(Setting).order_by(Setting.key))
-    all_settings = settings_result.scalars().all()
-    operators_result = await db.execute(
-        select(OperatorModel).where(OperatorModel.active == True).order_by(OperatorModel.number)
-    )
-    operators = operators_result.scalars().all()
+    from sqlalchemy import text as _text
+
+    # Ensure tables exist (idempotent — runs silently if already present)
+    try:
+        await db.execute(_text("""
+            CREATE TABLE IF NOT EXISTS operators (
+                id SERIAL PRIMARY KEY,
+                number VARCHAR(10) UNIQUE NOT NULL,
+                display_name VARCHAR(100),
+                email VARCHAR(200),
+                active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """))
+        await db.execute(_text("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key VARCHAR(100) PRIMARY KEY,
+                value TEXT,
+                description TEXT,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """))
+        await db.execute(_text("""
+            INSERT INTO settings (key, value, description) VALUES
+                ('transcription_engine',     'openai', 'Motore trascrizione default: openai o assemblyai'),
+                ('min_call_length_seconds',  '20',     'Durata minima registrazione in secondi'),
+                ('sidial_lookback_days',     '90',     'Giorni lookback registrazioni Sidial'),
+                ('sidial_retry_count',       '5',      'Numero massimo retry download registrazioni'),
+                ('sidial_retry_wait_seconds','180',    'Attesa secondi tra i retry download')
+            ON CONFLICT (key) DO NOTHING
+        """))
+        await db.commit()
+    except Exception as _exc:
+        logger.warning("settings_page: table creation failed (non-fatal): %s", _exc)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    flash_err = request.query_params.get("err", "")
+
+    try:
+        settings_result = await db.execute(select(Setting).order_by(Setting.key))
+        all_settings = settings_result.scalars().all()
+    except Exception as exc:
+        logger.error("settings_page: cannot query settings table: %s", exc)
+        all_settings = []
+        flash_err = flash_err or f"Tabella settings non disponibile: {exc}"
+
+    try:
+        operators_result = await db.execute(
+            select(OperatorModel).where(OperatorModel.active == True).order_by(OperatorModel.number)
+        )
+        operators = operators_result.scalars().all()
+    except Exception as exc:
+        logger.error("settings_page: cannot query operators table: %s", exc)
+        operators = []
+        flash_err = flash_err or f"Tabella operators non disponibile: {exc}"
+
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -1708,7 +1803,7 @@ async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
             "all_settings": all_settings,
             "operators": operators,
             "flash_ok": request.query_params.get("ok", ""),
-            "flash_err": request.query_params.get("err", ""),
+            "flash_err": flash_err,
         },
     )
 
