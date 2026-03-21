@@ -460,9 +460,14 @@ async def find_and_download_all_recordings(
         ragione_sociale=ragione_sociale, last_name=last_name,
     )
 
+    _empty_stats = {
+        "leads_found": 0, "total_recs": 0, "recent_recs": 0,
+        "converting_recs": 0, "total_seconds": 0, "search_params_used": 0,
+    }
+
     if not all_leads:
         logger.warning("Sidial: nessun lead trovato con nessun parametro")
-        return []
+        return ([], _empty_stats) if return_stats else []
 
     # ── FASE B: raccogli tutte le registrazioni, deduplica per rec_id ────────
     seen_rec_ids: set = set()
@@ -481,7 +486,8 @@ async def find_and_download_all_recordings(
 
     if not all_recs:
         logger.warning("Sidial: nessuna registrazione per %d lead trovati", len(all_leads))
-        return []
+        _no_recs_stats = {**_empty_stats, "leads_found": len(all_leads)}
+        return ([], _no_recs_stats) if return_stats else []
 
     # ── FASE C: filtra per lookback_days, ordina cronologicamente ────────────
     def _sort_key(r: dict) -> datetime:

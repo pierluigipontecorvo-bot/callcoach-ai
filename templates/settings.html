@@ -46,11 +46,11 @@
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>Operatori</span>
-    <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('new-op-form').classList.toggle('d-none')">
+    <button class="btn btn-sm btn-outline-secondary" id="btn-add-op" type="button">
       + Aggiungi
     </button>
   </div>
-  <div class="card-body" id="new-op-form" class="d-none" style="display:none!important;">
+  <div class="card-body" id="new-op-form" style="display:none;">
     <form method="post" action="/admin/ui/settings/operators/save" class="row g-2 align-items-end">
       <div class="col-auto">
         <label class="form-label">Numero (XX)</label>
@@ -109,10 +109,7 @@
 
 {% block scripts %}
 <script>
-document.getElementById('new-op-form').classList.remove('d-none');
-// Hide by default, toggle on button click
-document.getElementById('new-op-form').style.display = 'none';
-document.querySelector('[onclick*="new-op-form"]').addEventListener('click', function() {
+document.getElementById('btn-add-op').addEventListener('click', function() {
   var f = document.getElementById('new-op-form');
   f.style.display = f.style.display === 'none' ? 'block' : 'none';
 });

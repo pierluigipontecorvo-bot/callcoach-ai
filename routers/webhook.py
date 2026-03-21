@@ -27,7 +27,6 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from services.acuity import (
     check_webhook_signature,
-    extract_all_form_fields,
     extract_form_fields,
     extract_label,
     extract_phone,
@@ -42,7 +41,7 @@ from services.ai_analysis import analyze_call
 from services.campaign_db import get_campaign_by_code
 from services.campaign_parser import parse_campaign_code
 from services.email_service import generate_html_report, send_analysis_report
-from services.sidial import find_and_download_all_recordings, _normalize_phone
+from services.sidial import find_and_download_all_recordings
 from services.transcription import transcribe_audio
 from utils.helpers import parse_iso_datetime
 
