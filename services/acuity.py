@@ -114,11 +114,13 @@ _OPERATOR_EMAIL_RE = re.compile(r"op\.\d+\.[^@]+@effoncall\.com", re.IGNORECASE)
 # Matches op.XX.*@* (any domain — e.g. Gmail) for extracting the operator number
 _ANY_OP_EMAIL_RE  = re.compile(r"op\.(\d{2,})\.[^@]+@", re.IGNORECASE)
 
-# OPR. field: value like "91-STEFANO C." or "91 - STEFANO C." or "12-MARIO R."
-_OPR_VALUE_RE = re.compile(r"^(\d+)\s*-\s*(.+)$")
+# Formato valore operatore: "71-STEFANIA M." o "71 - STEFANIA M." o "91-STEFANO C."
+# Numero univoco XX + nome + iniziale cognome puntata (opzionale)
+_OPR_VALUE_RE = re.compile(r"^(\d+)\s*-\s*([A-Z][A-Za-zÀ-ÿ]+(?:\s+[A-Z]\.?)?)$")
 
-# Form field names that contain the operator identifier (case-insensitive, accent-stripped)
-_OPR_FIELD_KEYWORDS_U = ("OPR", "OPER", "OPERATRICE", "OPERATORE")
+# Form field names che identificano l'operatore (case-insensitive, accent-stripped)
+# Usati come hint prioritario ma NON esclusivi: il formato del valore è determinante
+_OPR_FIELD_KEYWORDS_U = ("OPR", "OPER", "OPERATRICE", "OPERATORE", "NOME OP")
 
 
 def find_operator_email(appointment_data: dict) -> str:
@@ -160,7 +162,15 @@ def _norm_fieldname(s: str) -> str:
 
 
 def _search_opr_in_list(items: list) -> str:
-    """Scan a list of {name, value} dicts for an OPR field."""
+    """
+    Cerca il campo operatore in una lista di {name, value}.
+    Strategia doppia:
+    1. Prima passa: cerca per nome campo (keywords OPR/OPER/OPERATORE/ecc.)
+    2. Seconda passa: cerca per formato valore XX-NOME C. (es. "71-STEFANIA M.")
+       indipendentemente dal nome del campo — il formato è determinante.
+    L'operatore è identificato univocamente dal numero XX.
+    """
+    # Passa 1: match per nome campo
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -168,8 +178,17 @@ def _search_opr_in_list(items: list) -> str:
         fn = _norm_fieldname(raw_name)
         if any(kw in fn for kw in _OPR_FIELD_KEYWORDS_U):
             v = (item.get("value") or "").strip()
-            if v:
+            if v and _OPR_VALUE_RE.match(v):
                 return v
+
+    # Passa 2: match per formato valore (XX-NOME C.) — il nome del campo è irrilevante
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        v = (item.get("value") or "").strip()
+        if v and _OPR_VALUE_RE.match(v):
+            return v
+
     return ""
 
 
