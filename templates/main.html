@@ -25,10 +25,10 @@
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
 
   <div class="d-flex gap-1 align-items-center flex-wrap">
-    <button class="btn btn-sm period-btn active" data-period="today">Oggi</button>
+    <button class="btn btn-sm period-btn"         data-period="today">Oggi</button>
     <button class="btn btn-sm period-btn"         data-period="yesterday">Ieri</button>
     <button class="btn btn-sm period-btn"         data-period="week">Sett.</button>
-    <button class="btn btn-sm period-btn"         data-period="month">Mese</button>
+    <button class="btn btn-sm period-btn active"  data-period="month">Mese</button>
     <button class="btn btn-sm period-btn"         data-period="all">Tutti</button>
     <button class="btn btn-sm period-btn"         data-period="custom">📅 Personalizzato</button>
     <span id="custom-range" class="d-none d-flex gap-1 align-items-center ms-1">
@@ -81,7 +81,7 @@
 <script>
 var _pollTimer     = null;
 var _hasProcessing = false;
-var _currentPeriod = 'today';
+var _currentPeriod = 'month';
 
 /* ── Period filter ──────────────────────────────────────── */
 document.querySelectorAll('.period-btn').forEach(function(btn) {
