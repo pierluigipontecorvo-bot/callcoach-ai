@@ -48,6 +48,20 @@ router = APIRouter(prefix="/admin/ui", tags=["admin-ui"])
 templates = Jinja2Templates(directory="templates")
 logger = logging.getLogger(__name__)
 
+# ── Label colors — used in all templates that show Acuity labels ─────────────
+# These match the exact badge colors shown in the Acuity label picker UI.
+# Update here to keep ALL pages in sync automatically.
+LABEL_COLORS: dict[str, str] = {
+    "PRESO":           "#f9a825",   # amber
+    "CONFERMATO":      "#1e88e5",   # medium blue
+    "APP.TO OK":       "#388e3c",   # dark green
+    "APP.TO KO":       "#c62828",   # dark red
+    "ANNULLATO":       "#f06292",   # hot pink
+    "DA RICHIAMARE":   "#7c3aed",   # purple
+    "NO SHOW":         "#6b7280",   # gray
+}
+_LABEL_COLORS_DEFAULT = "#708090"   # fallback for unknown labels
+
 _COOKIE_NAME = "callcoach_token"
 _ALGORITHM = "HS256"
 
@@ -1222,6 +1236,8 @@ async def appointments_data(
             "unique_operators": unique_operators,
             "unique_campaigns": unique_campaigns,
             "period": _period,
+            "label_colors": LABEL_COLORS,
+            "label_colors_default": _LABEL_COLORS_DEFAULT,
         },
     )
 
