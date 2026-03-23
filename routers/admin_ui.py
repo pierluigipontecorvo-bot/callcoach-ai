@@ -70,11 +70,13 @@ _ACUITY_CSS_COLOR_MAP: dict[str, str] = {
     "green":      "#388e3c",
     "teal":       "#0d9488",
     "blue":       "#1e88e5",
+    "sky":        "#1e88e5",   # Acuity usa "sky" per CONFERMATO
     "purple":     "#7c3aed",
     "gray":       "#6b7280",
     "grey":       "#6b7280",
     "black":      "#374151",
     "cream":      "#d4a55a",
+    "white":      "#708090",
 }
 _LABEL_COLORS_DEFAULT = "#708090"   # fallback for unknown labels
 
@@ -1023,6 +1025,7 @@ async def appointments_data(
                        Analysis.num_recordings, Analysis.total_talk_seconds,
                        Analysis.label_name, Analysis.label_color)
                 .where(Analysis.appointment_id.in_(appt_ids))
+                .order_by(Analysis.id.desc())   # più recente prima
             )
         except Exception as _qe:
             logger.warning("analyses full query failed (missing columns?): %s — retrying base", _qe)
@@ -1033,6 +1036,7 @@ async def appointments_data(
                        Analysis.progress, Analysis.step_message, Analysis.created_at,
                        Analysis.qualification_level)
                 .where(Analysis.appointment_id.in_(appt_ids))
+                .order_by(Analysis.id.desc())   # più recente prima
             )
 
         def _build_map_row(row) -> dict:
@@ -1051,10 +1055,12 @@ async def appointments_data(
                 "label_color": (row.label_color or "") if _full_cols else "",
             }
 
-        analyses_map: dict[str, dict] = {
-            row.appointment_id: _build_map_row(row)
-            for row in ana_result.all()
-        }
+        # Mantieni SOLO l'analisi più recente per ogni appointment_id
+        # (ORDER BY id DESC → il primo incontrato per ogni appt è il più recente)
+        analyses_map: dict[str, dict] = {}
+        for row in ana_result.all():
+            if row.appointment_id not in analyses_map:
+                analyses_map[row.appointment_id] = _build_map_row(row)
     else:
         analyses_map = {}
 
@@ -1292,18 +1298,27 @@ async def appointments_status_poll(request: Request, db: AsyncSession = Depends(
             .where(Analysis.processing_status.in_(["processing", "pending"]))
         )
     rows = result.all()
+
+    # Mantieni solo l'analisi PIÙ RECENTE per ogni appointment_id (id più alto)
+    # Senza questo, se ci sono più analisi per lo stesso appuntamento (retry),
+    # updateRowAvanz viene chiamata più volte e mostra risultati incoerenti.
+    latest_by_appt: dict[str, object] = {}
+    for r in rows:
+        if r.appointment_id not in latest_by_appt or r.id > latest_by_appt[r.appointment_id].id:
+            latest_by_appt[r.appointment_id] = r
+
     items = [
         {
-            "appt_id": row.appointment_id,
-            "status": row.processing_status,
-            "analysis_id": row.id,
-            "qualification_level": row.qualification_level or "",
-            "progress": row.progress or 0,
-            "step_message": row.step_message or "",
+            "appt_id": r.appointment_id,
+            "status": r.processing_status,
+            "analysis_id": r.id,
+            "qualification_level": r.qualification_level or "",
+            "progress": r.progress or 0,
+            "step_message": r.step_message or "",
         }
-        for row in rows
+        for r in latest_by_appt.values()
     ]
-    has_processing = any(r.processing_status in ("processing", "pending") for r in rows)
+    has_processing = any(r.processing_status in ("processing", "pending") for r in latest_by_appt.values())
     return JSONResponse({"items": items, "has_processing": has_processing})
 
 

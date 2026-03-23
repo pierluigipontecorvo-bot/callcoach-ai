@@ -187,6 +187,7 @@ async def run_analysis_pipeline(
     from sqlalchemy import select
 
     appointment_id = str(appointment_data.get("id", "unknown"))
+    analysis_id: int | None = None
     logger.info("[%s] Pipeline started (account=%d)", appointment_id, acuity_account)
 
     # ── 0. Parse campaign code — pre-flight before creating any DB record ─────
@@ -326,17 +327,20 @@ async def run_analysis_pipeline(
     else:
         await update_step(analysis_id, 8, "ok", f"Operatore #{op_info['number']} — {operator_display}")
 
-    # Save operator info
-    async with AsyncSessionLocal() as _sess:
-        async with _sess.begin():
-            _a = await _sess.get(Analysis, analysis_id)
-            if _a:
-                _a.operator_name = operator_display or None
-                _a.operator_email = operator_email or None
-                _a.client_phone = phone or None
-                _a.client_company = ragione_sociale or None
-                _a.appointment_datetime = appointment_dt
-                _a.campaign_code = campaign_info["raw"]
+    # Save operator info (non-fatal if fails)
+    try:
+        async with AsyncSessionLocal() as _sess:
+            async with _sess.begin():
+                _a = await _sess.get(Analysis, analysis_id)
+                if _a:
+                    _a.operator_name = operator_display or None
+                    _a.operator_email = operator_email or None
+                    _a.client_phone = phone or None
+                    _a.client_company = ragione_sociale or None
+                    _a.appointment_datetime = appointment_dt
+                    _a.campaign_code = campaign_info["raw"]
+    except Exception as _save8_exc:
+        logger.warning("[%s] Save operator info fallito (non-fatale): %s", appointment_id, _save8_exc)
 
     # ── Guard: phone required ─────────────────────────────────────────────────
     if not phone:
