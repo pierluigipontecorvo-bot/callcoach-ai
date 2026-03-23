@@ -928,6 +928,8 @@ async def appointments_data(
 
     from services.acuity import (
         clear_appointments_cache,
+        extract_phone,
+        extract_piva,
         extract_ragione_sociale,
         get_operator_display,
         list_appointments,
@@ -1106,11 +1108,17 @@ async def appointments_data(
         except Exception:
             date_group = "other"
 
+        # Short date formats for table columns (just day/month, no year)
+        _created_short = _created_date.strftime("%d/%m") if _created_date else created_display
+        _dt_short = dt_obj.strftime("%d/%m") if dt_obj else (dt_raw[:5] if dt_raw else "")
+
         enriched.append({
             "id": appt_id,
             "account": a["_account"],
             "dt_display": dt_display,
+            "dt_short": _dt_short,
             "created_display": created_display,
+            "created_short": _created_short,
             "_created_date_obj": _created_date,   # date object for period filtering
             "campaign_code": campaign_code or a.get("type", "—"),
             "raw_acuity_type": a.get("type", ""),   # exact string from Acuity API
@@ -1121,6 +1129,8 @@ async def appointments_data(
             "labels": labels,
             "is_past": is_past,
             "date_group": date_group,   # future | today | yesterday | past | other
+            "phone": extract_phone(a) or "",
+            "piva": extract_piva(a) or "",
             "analysis": analyses_map.get(appt_id),
         })
 

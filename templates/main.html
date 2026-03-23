@@ -2,52 +2,66 @@
 {% block title %}Appuntamenti — CallCoach Admin{% endblock %}
 
 {% block content %}
-<!-- ── Header ─────────────────────────────────────────────────────── -->
-<div class="d-flex justify-content-between align-items-center mb-2">
-  <h4 class="fw-bold mb-0">Appuntamenti &amp; Pipeline</h4>
-  <div class="d-flex gap-2 align-items-center">
 
-    <!-- Motore trascrizione globale -->
-    <label class="text-muted mb-0" style="font-size:11px; font-family:'Space Grotesk',sans-serif; white-space:nowrap;">
-      Motore:
-    </label>
-    <select id="global-engine" class="form-select form-select-sm" style="width:130px; font-size:12px;">
+{# ── Sub-header: motore default + impostazioni ───────────────────── #}
+<div class="d-flex justify-content-between align-items-center mb-3"
+     style="border-bottom:1px solid #e5e7eb; padding-bottom:14px;">
+  <div class="d-flex align-items-center gap-2">
+    <span style="font-size:13px; color:#708090; font-family:'Space Grotesk',sans-serif;">🎙 Motore default:</span>
+    <select id="global-engine" class="form-select form-select-sm" style="width:200px; font-size:12px;">
       <option value="">Default</option>
-      <option value="openai">OpenAI</option>
-      <option value="assemblyai">AssemblyAI</option>
+      <option value="openai">OpenAI (Whisper)</option>
+      <option value="assemblyai">AssemblyAI (speaker)</option>
     </select>
-
-    <button id="btn-refresh" class="btn btn-sm btn-outline-secondary" onclick="loadData(true)" style="font-size:12px;">
-      ↺ Aggiorna
-    </button>
-    <span id="last-updated" style="font-size:11px; color:#708090;"></span>
   </div>
+  <a href="/admin/ui/settings"
+     class="btn btn-sm btn-outline-secondary"
+     style="font-size:12px; font-family:'Space Grotesk',sans-serif;">
+    ⚙ Impostazioni
+  </a>
 </div>
 
-<!-- ── Filtri periodo ─────────────────────────────────────────────── -->
-<div class="d-flex gap-1 align-items-center mb-3 flex-wrap" id="period-bar">
-  <button class="btn btn-sm period-btn active" data-period="today"     style="font-size:12px; padding:4px 12px;">Oggi</button>
-  <button class="btn btn-sm period-btn"         data-period="yesterday" style="font-size:12px; padding:4px 12px;">Ieri</button>
-  <button class="btn btn-sm period-btn"         data-period="week"      style="font-size:12px; padding:4px 12px;">Settimana</button>
-  <button class="btn btn-sm period-btn"         data-period="month"     style="font-size:12px; padding:4px 12px;">Mese</button>
-  <button class="btn btn-sm period-btn"         data-period="all"       style="font-size:12px; padding:4px 12px;">Tutti</button>
-  <button class="btn btn-sm period-btn"         data-period="custom"    style="font-size:12px; padding:4px 12px;">Personalizzato</button>
-  <!-- Custom date range picker (hidden by default) -->
-  <span id="custom-range" class="d-none d-flex gap-1 align-items-center ms-1">
-    <input type="date" id="date-from" class="form-control form-control-sm" style="width:135px; font-size:12px;">
-    <span style="font-size:12px; color:#708090;">→</span>
-    <input type="date" id="date-to"   class="form-control form-control-sm" style="width:135px; font-size:12px;">
-    <button class="btn btn-sm btn-dark" onclick="loadData(true)" style="font-size:12px;">OK</button>
-  </span>
+{# ── Filtri periodo + cerca ───────────────────────────────────────── #}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+
+  <div class="d-flex gap-1 align-items-center flex-wrap">
+    <button class="btn btn-sm period-btn active" data-period="today">Oggi</button>
+    <button class="btn btn-sm period-btn"         data-period="yesterday">Ieri</button>
+    <button class="btn btn-sm period-btn"         data-period="week">Sett.</button>
+    <button class="btn btn-sm period-btn"         data-period="month">Mese</button>
+    <button class="btn btn-sm period-btn"         data-period="all">Tutti</button>
+    <button class="btn btn-sm period-btn"         data-period="custom">📅 Personalizzato</button>
+    <span id="custom-range" class="d-none d-flex gap-1 align-items-center ms-1">
+      <input type="date" id="date-from" class="form-control form-control-sm" style="width:130px; font-size:12px;">
+      <span style="font-size:12px; color:#708090;">→</span>
+      <input type="date" id="date-to"   class="form-control form-control-sm" style="width:130px; font-size:12px;">
+      <button class="btn btn-sm btn-dark" onclick="loadData(true)" style="font-size:12px;">OK</button>
+    </span>
+  </div>
+
+  <div class="d-flex align-items-center gap-2">
+    <input type="text" id="search-box"
+           placeholder="🔍 Cerca..."
+           class="form-control form-control-sm"
+           style="width:190px; font-size:12px;"
+           oninput="applyClientFilter()">
+    <button id="btn-refresh"
+            class="btn btn-sm btn-outline-secondary"
+            onclick="loadData(true)"
+            style="font-size:12px; padding:3px 10px;">↺</button>
+    <span id="last-updated" style="font-size:11px; color:#708090; white-space:nowrap;"></span>
+  </div>
+
 </div>
 
-<!-- ── Table container ─────────────────────────────────────────────── -->
+{# ── Table container ──────────────────────────────────────────────── #}
 <div id="main-table-container">
-  <div class="text-center py-5 text-muted" style="font-size:13px;">
+  <div class="text-center py-5 text-muted">
     <div class="spinner-border spinner-border-sm me-2" role="status"></div>
     Caricamento...
   </div>
 </div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -57,39 +71,35 @@
   border: 1px solid #d3d2d2;
   color: #708090;
   border-radius: 20px;
+  font-size: 12px;
+  padding: 3px 14px;
+  font-family: 'Space Grotesk', sans-serif;
 }
-.period-btn:hover {
-  background: #f0f3f8;
-  color: #001126;
-}
-.period-btn.active {
-  background: #001126;
-  border-color: #001126;
-  color: #fff;
-}
+.period-btn:hover  { background: #f0f3f8; color: #001126; border-color: #aaa; }
+.period-btn.active { background: #001126; border-color: #001126; color: #fff; }
 </style>
 <script>
-var _pollTimer   = null;
+var _pollTimer     = null;
 var _hasProcessing = false;
 var _currentPeriod = 'today';
 
-/* ── Period filter ─────────────────────────── */
+/* ── Period filter ──────────────────────────────────────── */
 document.querySelectorAll('.period-btn').forEach(function(btn) {
   btn.addEventListener('click', function() {
     document.querySelectorAll('.period-btn').forEach(function(b){ b.classList.remove('active'); });
     btn.classList.add('active');
     _currentPeriod = btn.dataset.period;
-    var customRange = document.getElementById('custom-range');
+    var cr = document.getElementById('custom-range');
     if (_currentPeriod === 'custom') {
-      customRange.classList.remove('d-none');
+      cr.classList.remove('d-none');
     } else {
-      customRange.classList.add('d-none');
+      cr.classList.add('d-none');
       loadData(false);
     }
   });
 });
 
-/* ── Load table data ───────────────────────── */
+/* ── Load table ─────────────────────────────────────────── */
 function loadData(forceRefresh) {
   var url = '/admin/ui/appointments/data?v=3&period=' + _currentPeriod;
   if (_currentPeriod === 'custom') {
@@ -99,115 +109,141 @@ function loadData(forceRefresh) {
     if (dt) url += '&date_to='   + dt;
   }
   if (forceRefresh) url += '&refresh=1';
-
   document.getElementById('btn-refresh').disabled = true;
   fetch(url)
     .then(function(r){ return r.text(); })
     .then(function(html){
       document.getElementById('main-table-container').innerHTML = html;
-      var now = new Date();
+      var n = new Date();
       document.getElementById('last-updated').textContent =
-        'Aggiornato ' + now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0');
+        'Agg. ' + n.getHours() + ':' + String(n.getMinutes()).padStart(2,'0');
       document.getElementById('btn-refresh').disabled = false;
+      applyClientFilter();
       schedulePolling();
     })
-    .catch(function(){
-      document.getElementById('btn-refresh').disabled = false;
+    .catch(function(){ document.getElementById('btn-refresh').disabled = false; });
+}
+
+/* ── Client-side search ─────────────────────────────────── */
+function applyClientFilter() {
+  var q = (document.getElementById('search-box').value || '').toLowerCase().trim();
+  document.querySelectorAll('tbody tr.appt-row').forEach(function(row) {
+    var ok = !q || row.textContent.toLowerCase().includes(q);
+    row.style.display = ok ? '' : 'none';
+    var det = document.getElementById('detail-' + row.dataset.apptId);
+    if (det && !ok) det.style.display = 'none';
+  });
+}
+
+/* ── Expand/collapse detail ─────────────────────────────── */
+function toggleDetail(apptId) {
+  var det = document.getElementById('detail-' + apptId);
+  var btn = document.querySelector('[data-expand="' + apptId + '"]');
+  if (!det) return;
+  var open = det.style.display !== 'none' && det.style.display !== '';
+  det.style.display = open ? 'none' : '';
+  if (btn) btn.textContent = open ? '▶' : '▼';
+}
+
+/* ── Trigger analysis ───────────────────────────────────── */
+function triggerAnalysis(accountId, apptId) {
+  /* Per-row engine overrides global */
+  var rowSel = document.getElementById('row-engine-' + apptId);
+  var detSel = document.getElementById('detail-engine-' + apptId);
+  var engine = (rowSel && rowSel.value) || (detSel && detSel.value)
+               || document.getElementById('global-engine').value;
+  var url = '/admin/ui/appointments/' + accountId + '/' + apptId + '/analyze';
+  if (engine) url += '?engine=' + encodeURIComponent(engine);
+  fetch(url, { method: 'POST' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok) {
+        _hasProcessing = true;
+        schedulePolling();
+        setTimeout(function(){ loadData(false); }, 2000);
+      } else {
+        alert('Errore: ' + (d.error || 'sconosciuto'));
+      }
     });
 }
 
-/* ── Polling ───────────────────────────────── */
+/* ── Send email ─────────────────────────────────────────── */
+function sendEmail(analysisId, btn) {
+  btn.disabled = true;
+  var orig = btn.textContent;
+  btn.textContent = '…';
+  fetch('/admin/ui/analyses/' + analysisId + '/send-email', { method: 'POST' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      btn.textContent = d.ok ? '✓' : '✗';
+      setTimeout(function(){ btn.disabled = false; btn.textContent = orig; }, 3000);
+    })
+    .catch(function(){ btn.disabled = false; btn.textContent = orig; });
+}
+
+/* ── Sync per-row engine with detail selector ───────────── */
+function syncEngine(apptId, srcId) {
+  var val = document.getElementById(srcId).value;
+  var targets = ['row-engine-' + apptId, 'detail-engine-' + apptId];
+  targets.forEach(function(id){ if (id !== srcId) {
+    var el = document.getElementById(id);
+    if (el) el.value = val;
+  }});
+}
+
+/* ── Polling ────────────────────────────────────────────── */
 function schedulePolling() {
   if (_pollTimer) clearTimeout(_pollTimer);
   _pollTimer = setTimeout(pollStatus, 8000);
 }
-
 function pollStatus() {
   fetch('/admin/ui/appointments/status-poll')
     .then(function(r){ return r.json(); })
     .then(function(data){
       _hasProcessing = data.has_processing;
-      data.items.forEach(updateRowStatus);
+      data.items.forEach(updateRowAvanz);
       if (_hasProcessing) schedulePolling();
     })
-    .catch(function(){
-      if (_hasProcessing) schedulePolling();
-    });
+    .catch(function(){ if (_hasProcessing) schedulePolling(); });
 }
-
-function updateRowStatus(item) {
-  var row = document.querySelector('[data-appt-id="' + item.appt_id + '"]');
-  if (!row) return;
-  var cell = row.querySelector('.pipeline-status-cell');
+function updateRowAvanz(item) {
+  var cell = document.querySelector('[data-appt-id="' + item.appt_id + '"] .avanz-cell');
   if (!cell) return;
-
-  var pct    = item.progress || 0;
-  var msg    = item.step_message || '';
-  var status = item.status;
-
-  if (status === 'completed') {
+  var pct = item.progress || 0;
+  var msg = item.step_message || 'In corso...';
+  if (item.status === 'completed') {
     var ql = item.qualification_level || '';
-    cell.innerHTML = '<span class="badge ' + qualBadgeClass(ql) + '" style="font-size:11px;">' + qualLabel(ql) + '</span>';
-  } else if (status === 'error') {
-    cell.innerHTML = '<span class="badge bg-danger" style="font-size:11px;">Errore</span>';
+    cell.innerHTML =
+      '<div style="font-size:11px;font-weight:600;color:#333;margin-bottom:2px;">100%</div>' +
+      '<span class="badge ' + _qualClass(ql) + '" style="font-size:10px;">' + _qualLabel(ql) + '</span>';
+  } else if (item.status === 'error') {
+    cell.innerHTML = '<span class="badge bg-dark" style="font-size:10px;">❌ Errore tecnico</span>';
   } else {
-    cell.innerHTML = (
-      '<div class="progress" style="height:5px; margin-bottom:3px;">' +
-      '<div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%"></div>' +
+    cell.innerHTML =
+      '<div style="font-size:11px;color:#708090;margin-bottom:2px;">' + pct + '%</div>' +
+      '<div class="progress" style="height:3px;margin-bottom:3px;">' +
+        '<div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%;"></div>' +
       '</div>' +
-      '<span style="font-size:10px; color:#708090;">' + (msg || 'In corso...') + '</span>'
-    );
+      '<div style="font-size:10px;color:#708090;">Fase: ' + msg + '</div>';
   }
 }
-
-function qualBadgeClass(ql) {
-  return ({
-    'eccellente':    'bg-success',
-    'buona':         'bg-primary',
-    'sufficiente':   'bg-info text-dark',
-    'da_migliorare': 'bg-warning text-dark',
-    'inaccurata':    'bg-danger',
-    'non_in_target': 'bg-secondary',
-    'errore_tecnico':'bg-dark',
-  })[ql] || 'bg-secondary';
+function _qualClass(ql) {
+  return ({eccellente:'bg-success',buona:'bg-primary',sufficiente:'bg-info text-dark',
+    da_migliorare:'bg-warning text-dark',inaccurata:'bg-danger',
+    non_in_target:'bg-secondary',errore_tecnico:'bg-dark'})[ql] || 'bg-secondary';
+}
+function _qualLabel(ql) {
+  return ({eccellente:'✅ Eccellente',buona:'✅ Buona',sufficiente:'Sufficiente',
+    da_migliorare:'⚠️ Da migliorare',inaccurata:'❌ Inaccurata',
+    non_in_target:'Non in target',errore_tecnico:'❌ Errore tecnico'})[ql] || ql;
 }
 
-function qualLabel(ql) {
-  return ({
-    'eccellente':    'Eccellente',
-    'buona':         'Buona',
-    'sufficiente':   'Sufficiente',
-    'da_migliorare': 'Da migliorare',
-    'inaccurata':    'Inaccurata',
-    'non_in_target': 'Non in target',
-    'errore_tecnico':'Errore tecnico',
-  })[ql] || ql;
-}
-
-/* ── Trigger analysis ──────────────────────── */
-function triggerAnalysis(accountId, appointmentId) {
-  var engine = document.getElementById('global-engine').value;
-  var url = '/admin/ui/appointments/' + accountId + '/' + appointmentId + '/analyze';
-  if (engine) url += '?engine=' + encodeURIComponent(engine);
-  fetch(url, { method: 'POST' })
-    .then(function(r){ return r.json(); })
-    .then(function(data){
-      if (data.ok) {
-        setTimeout(function(){ loadData(false); }, 1500);
-      } else {
-        alert('Errore: ' + (data.error || 'sconosciuto'));
-      }
-    });
-}
-
-/* ── Init ──────────────────────────────────── */
-// Set today's dates as default for custom picker
+/* ── Init ───────────────────────────────────────────────── */
 (function(){
   var today = new Date().toISOString().slice(0,10);
   document.getElementById('date-from').value = today;
   document.getElementById('date-to').value   = today;
+  loadData(false);
 })();
-
-loadData(false);
 </script>
 {% endblock %}
