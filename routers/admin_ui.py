@@ -60,6 +60,22 @@ LABEL_COLORS: dict[str, str] = {
     "DA RICHIAMARE":   "#7c3aed",   # purple
     "NO SHOW":         "#6b7280",   # gray
 }
+# Fallback: Acuity restituisce anche un campo "color" con nomi CSS (yellow, blue, etc.)
+# Usato se il nome label non combacia col dizionario sopra.
+_ACUITY_CSS_COLOR_MAP: dict[str, str] = {
+    "yellow":     "#f9a825",
+    "orange":     "#f97316",
+    "pink":       "#f06292",
+    "red":        "#c62828",
+    "green":      "#388e3c",
+    "teal":       "#0d9488",
+    "blue":       "#1e88e5",
+    "purple":     "#7c3aed",
+    "gray":       "#6b7280",
+    "grey":       "#6b7280",
+    "black":      "#374151",
+    "cream":      "#d4a55a",
+}
 _LABEL_COLORS_DEFAULT = "#708090"   # fallback for unknown labels
 
 _COOKIE_NAME = "callcoach_token"
@@ -1068,9 +1084,15 @@ async def appointments_data(
         op_display = get_operator_display(a)
         ragione = extract_ragione_sociale(a) or "—"
 
+        raw_labels = a.get("labels") or []
+        if raw_labels:
+            logger.debug(
+                "appt %s labels raw: %s",
+                a.get("id"), [(l.get("name"), l.get("color")) for l in raw_labels]
+            )
         labels = [
             {"name": lbl.get("name", ""), "color": lbl.get("color") or ""}
-            for lbl in (a.get("labels") or [])
+            for lbl in raw_labels
         ]
 
         dt_raw = a.get("datetime", "")
@@ -1238,6 +1260,7 @@ async def appointments_data(
             "period": _period,
             "label_colors": LABEL_COLORS,
             "label_colors_default": _LABEL_COLORS_DEFAULT,
+            "acuity_css_color_map": _ACUITY_CSS_COLOR_MAP,
         },
     )
 

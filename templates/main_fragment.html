@@ -64,7 +64,9 @@
       {# ETICHETTA — colored dot + label name + qualifica #}
       <td style="padding:10px 8px;">
         {% for lbl in a.labels %}
-          {% set _dot = label_colors.get(lbl.name | upper, label_colors_default) %}
+          {% set _by_name = label_colors.get(lbl.name | upper, '') %}
+          {% set _by_css  = acuity_css_color_map.get(lbl.color | lower, '') %}
+          {% set _dot     = _by_name or _by_css or label_colors_default %}
           <div style="display:flex; align-items:center; gap:5px; margin-bottom:2px;">
             <span style="display:inline-block; width:8px; height:8px; border-radius:50%; flex-shrink:0;
                          background:{{ _dot }};"></span>
