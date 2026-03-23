@@ -1304,10 +1304,41 @@ async def trigger_appointment_analysis(
     from urllib.parse import quote
 
     full_appointment = await get_appointment(appointment_id, account_id)
+    actual_account = account_id
+    # Fallback: try the other account in case the appointment is cross-account
+    if not full_appointment:
+        fallback_account = 2 if account_id == 1 else 1
+        full_appointment = await get_appointment(appointment_id, fallback_account)
+        if full_appointment:
+            actual_account = fallback_account
+            logger.info(
+                "get_appointment fallback: appt %s found on account %d (tried %d first)",
+                appointment_id, fallback_account, account_id,
+            )
     if not full_appointment:
         return JSONResponse(
             {"error": f"Impossibile recuperare l'appuntamento {appointment_id} da Acuity."},
             status_code=404,
+        )
+
+    # Pre-flight: check campaign exists in DB before starting background task
+    from services.campaign_parser import parse_campaign_code
+    from services.campaign_db import get_campaign_by_code
+    from database import get_db as _get_db
+
+    appt_type = full_appointment.get("type", "")
+    campaign_info = parse_campaign_code(appt_type)
+    if not campaign_info.get("valid"):
+        return JSONResponse(
+            {"error": f"Tipo appuntamento non parseable come codice campagna: '{appt_type}'"},
+            status_code=422,
+        )
+
+    campaign_db = await get_campaign_by_code(campaign_info["raw"])
+    if campaign_db is None:
+        return JSONResponse(
+            {"error": f"Campagna '{campaign_info['raw']}' non configurata nel DB — aggiungila prima di analizzare."},
+            status_code=422,
         )
 
     # engine param: "" or None → no override (use campaign or global default)
@@ -1316,7 +1347,7 @@ async def trigger_appointment_analysis(
     background_tasks.add_task(
         run_analysis_pipeline,
         appointment_data=full_appointment,
-        acuity_account=account_id,
+        acuity_account=actual_account,
         engine_override=engine_override,
     )
 

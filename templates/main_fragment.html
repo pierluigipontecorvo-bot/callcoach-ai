@@ -174,13 +174,13 @@
           {# 🎙 per-row engine selector #}
           <select id="row-engine-{{ a.id }}"
                   class="form-select form-select-sm"
-                  style="width:42px; font-size:16px; padding:1px 0; border:1px solid #ddd;
-                         border-radius:6px; text-align:center; cursor:pointer;"
+                  style="width:76px; font-size:11px; padding:1px 3px; border:1px solid #ddd;
+                         border-radius:6px; cursor:pointer;"
                   title="Motore per questo appuntamento"
                   onchange="syncEngine('{{ a.id }}', 'row-engine-{{ a.id }}')">
-            <option value="">🎙</option>
-            <option value="openai">OpenAI</option>
-            <option value="assemblyai">AssemblyAI</option>
+            <option value="">🎙 Default</option>
+            <option value="openai">Whisper</option>
+            <option value="assemblyai">Speaker</option>
           </select>
           {% if a.campaign_cfg %}
             <button class="btn btn-sm btn-outline-dark btn-analizza"
@@ -194,8 +194,7 @@
         {# Riga 2 — visibile solo se c'è analisi #}
         {% if a.analysis and a.analysis.id %}
           <div class="d-flex gap-1" style="align-items:center; flex-wrap:nowrap;">
-            {% if a.analysis.status == 'completed'
-               and a.analysis.qualification_level not in ('errore_tecnico',) %}
+            {% if a.analysis.status == 'completed' %}
               <button class="btn btn-sm btn-outline-secondary"
                       style="font-size:12px; padding:2px 7px;"
                       title="Invia email"
