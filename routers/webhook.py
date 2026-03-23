@@ -306,7 +306,17 @@ async def run_analysis_pipeline(
     # ── STEP 8: Identify operator ─────────────────────────────────────────────
     await update_step(analysis_id, 8, "running", "Identificazione operatore...")
     email_field = find_operator_email(appointment_data) or appointment_data.get("email", "")
-    op_info = await identify_operator(email_field, form_fields)
+    try:
+        op_info = await identify_operator(email_field, form_fields)
+    except Exception as _op_exc:
+        logger.warning("[%s] identify_operator error (non-fatal): %s", appointment_id, _op_exc)
+        op_info = {
+            "number": None,
+            "email": email_field,
+            "display_name": None,
+            "source": None,
+            "warning": f"Errore lookup operatore: {_op_exc}",
+        }
 
     operator_email = op_info["email"] or ""
     operator_display = op_info["display_name"] or _initial_op_name

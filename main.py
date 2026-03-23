@@ -113,6 +113,23 @@ async def lifespan(app: FastAPI):
         active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT NOW()
     )""", "operators table")
+    # operators table was created with 'name' in old schema.sql — add missing cols
+    await _run_sql(
+        "ALTER TABLE operators ADD COLUMN IF NOT EXISTS number VARCHAR(10) UNIQUE",
+        "operators.number",
+    )
+    await _run_sql(
+        "ALTER TABLE operators ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)",
+        "operators.display_name",
+    )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0",
+        "analyses.progress",
+    )
+    await _run_sql(
+        "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS step_message TEXT",
+        "analyses.step_message",
+    )
     await _run_sql("""CREATE TABLE IF NOT EXISTS settings (
         key VARCHAR(100) PRIMARY KEY,
         value TEXT,
