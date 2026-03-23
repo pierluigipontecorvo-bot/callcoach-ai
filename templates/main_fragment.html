@@ -61,17 +61,48 @@
         {{ a.op_display }}
       </td>
 
-      {# ETICHETTA — colored dot + label name #}
+      {# ETICHETTA — colored dot + label name + qualifica #}
+      {% set _LC = {
+        'PRESO':      '#f9a825',
+        'ANNULLATO':  '#f06292',
+        'APP.TO KO':  '#c62828',
+        'APP.TO OK':  '#2e7d32',
+        'CONFERMATO': '#42a5f5',
+        'DA RICHIAMARE': '#a78bfa',
+        'NO SHOW':    '#94a3b8',
+      } %}
       <td style="padding:10px 8px;">
         {% for lbl in a.labels %}
+          {% set _dot = _LC.get(lbl.name | upper, '#708090') %}
           <div style="display:flex; align-items:center; gap:5px; margin-bottom:2px;">
             <span style="display:inline-block; width:8px; height:8px; border-radius:50%; flex-shrink:0;
-                         background:{% if lbl.color %}{{ lbl.color }}{% else %}#aaa{% endif %};"></span>
+                         background:{{ _dot }};"></span>
             <span style="font-size:11px; font-weight:600; color:#334155;">{{ lbl.name }}</span>
           </div>
         {% else %}
           <span style="font-size:11px; color:#aaa;">—</span>
         {% endfor %}
+        {# Qualificazione sotto l'etichetta #}
+        {% if a.analysis and a.analysis.status == 'completed' %}
+          {% set ql = a.analysis.qualification_level %}
+          <div style="margin-top:3px;">
+            {% if ql == 'eccellente' %}
+              <span style="font-size:9px; font-weight:700; color:#16a34a;">✅ Eccellente</span>
+            {% elif ql == 'buona' %}
+              <span style="font-size:9px; font-weight:700; color:#2563eb;">✅ Buona</span>
+            {% elif ql == 'sufficiente' %}
+              <span style="font-size:9px; font-weight:700; color:#0891b2;">Sufficiente</span>
+            {% elif ql == 'da_migliorare' %}
+              <span style="font-size:9px; font-weight:700; color:#d97706;">⚠ Da migliorare</span>
+            {% elif ql == 'inaccurata' %}
+              <span style="font-size:9px; font-weight:700; color:#dc2626;">❌ Inaccurata</span>
+            {% elif ql == 'non_in_target' %}
+              <span style="font-size:9px; color:#708090;">Non in target</span>
+            {% elif ql == 'errore_tecnico' %}
+              <span style="font-size:9px; color:#94a3b8;">err. tecnico</span>
+            {% endif %}
+          </div>
+        {% endif %}
       </td>
 
       {# AVANZ. — progressione o risultato #}

@@ -157,9 +157,9 @@ function toggleDetail(apptId) {
   var det = document.getElementById('detail-' + apptId);
   var btn = document.querySelector('[data-expand="' + apptId + '"]');
   if (!det) return;
-  var open = det.style.display !== 'none' && det.style.display !== '';
-  det.style.display = open ? 'none' : '';
-  if (btn) btn.textContent = open ? '▶' : '▼';
+  var isHidden = det.style.display === 'none';
+  det.style.display = isHidden ? '' : 'none';
+  if (btn) btn.textContent = isHidden ? '▼' : '▶';
 }
 
 /* ── Trigger analysis ───────────────────────────────────── */
@@ -229,6 +229,15 @@ function syncEngine(apptId, srcId) {
     if (el) el.value = val;
   }});
 }
+
+/* ── Global engine → propaga a tutte le righe ───────────── */
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.id === 'global-engine') {
+    var val = e.target.value;
+    document.querySelectorAll('[id^="row-engine-"],[id^="detail-engine-"]')
+      .forEach(function(el) { el.value = val; });
+  }
+});
 
 /* ── Polling ────────────────────────────────────────────── */
 function schedulePolling() {
