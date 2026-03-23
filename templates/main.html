@@ -147,23 +147,45 @@ function toggleDetail(apptId) {
 
 /* ── Trigger analysis ───────────────────────────────────── */
 function triggerAnalysis(accountId, apptId) {
+  /* Visual feedback immediato */
+  var btn = document.querySelector(
+    '[data-appt-id="' + apptId + '"] .btn-analizza'
+  );
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '…';
+  }
+
   /* Per-row engine overrides global */
   var rowSel = document.getElementById('row-engine-' + apptId);
   var detSel = document.getElementById('detail-engine-' + apptId);
   var engine = (rowSel && rowSel.value) || (detSel && detSel.value)
-               || document.getElementById('global-engine').value;
+               || (document.getElementById('global-engine') || {}).value || '';
   var url = '/admin/ui/appointments/' + accountId + '/' + apptId + '/analyze';
   if (engine) url += '?engine=' + encodeURIComponent(engine);
+
   fetch(url, { method: 'POST' })
-    .then(function(r){ return r.json(); })
+    .then(function(r){
+      if (!r.ok) {
+        return r.text().then(function(t){
+          throw new Error('HTTP ' + r.status + ': ' + t.substring(0, 200));
+        });
+      }
+      return r.json();
+    })
     .then(function(d){
       if (d.ok) {
         _hasProcessing = true;
         schedulePolling();
         setTimeout(function(){ loadData(false); }, 2000);
       } else {
-        alert('Errore: ' + (d.error || 'sconosciuto'));
+        alert('Errore: ' + (d.error || JSON.stringify(d)));
+        if (btn) { btn.disabled = false; btn.textContent = '▶ Analizza'; }
       }
+    })
+    .catch(function(err){
+      alert('Errore connessione:\n' + err.message);
+      if (btn) { btn.disabled = false; btn.textContent = '▶ Analizza'; }
     });
 }
 
