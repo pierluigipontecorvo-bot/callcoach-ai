@@ -205,15 +205,23 @@
           {% if a.analysis and a.analysis.pipeline_steps %}
             {# Pipeline grid 4 × 4 #}
             {% set steps = a.analysis.pipeline_steps %}
-            {% set step_names = {
-              '1':'Webhook','2':'Firma','3':'Acuity','4':'Form',
-              '5':'Etichetta','6':'Data','7':'Campagna','8':'Operatore',
-              '9':'Sidial','10':'Download','11':'Trascrizione','12':'Analisi',
-              '13':'Salvataggio','14':'Email'
-            } %}
+            {% set step_keys = [
+              '1_webhook','2_firma','3_acuity','4_form',
+              '5_etichetta','6_data','7_campagna','8_operatore',
+              '9_sidial','10_download','11_trascrizione','12_analisi',
+              '13_salvataggio','14_email'
+            ] %}
+            {% set step_labels = [
+              'Webhook','Firma','Acuity','Form',
+              'Etichetta','Data','Campagna','Operatore',
+              'Sidial','Download','Trascrizione','Analisi',
+              'Salvataggio','Email'
+            ] %}
             <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:14px;">
-              {% for n in range(1, 15) %}
-                {% set k = n|string %}
+              {% for idx in range(14) %}
+                {% set n = idx + 1 %}
+                {% set k = step_keys[idx] %}
+                {% set lbl = step_labels[idx] %}
                 {% set s = steps.get(k) or {} %}
                 {% set st = s.get('status', 'pending') %}
                 {% set sm = s.get('message', '') %}
@@ -222,7 +230,7 @@
                   border:1px solid {% if st=='stop' %}#dc3545{% elif st=='warning' %}#f59e0b{% elif st=='ok' %}#d1fae5{% else %}#e2e8f0{% endif %};
                   {% if st=='stop' %}background:#fff5f5;{% elif st=='warning' %}background:#fffbf0;{% elif st=='ok' %}background:#f0fdf4;{% endif %}">
                   <div style="font-size:10px; font-weight:700; color:#001126; margin-bottom:2px; font-family:'Space Grotesk',sans-serif;">
-                    {{ n }}·{{ step_names.get(k,'?') }}
+                    {{ n }}·{{ lbl }}
                     {% if st == 'ok'      %}✅
                     {% elif st == 'warning' %}⚠️
                     {% elif st == 'stop'    %}🔴
@@ -236,7 +244,7 @@
                     <div style="font-size:9px; color:#94a3b8; margin-top:1px;">{{ sd }}</div>
                   {% endif %}
                   {# Upload buttons se step 10 in stop/warning #}
-                  {% if k == '10' and st in ('stop','warning') %}
+                  {% if k == '10_download' and st in ('stop','warning') %}
                     <div style="display:flex; gap:4px; margin-top:5px;">
                       <button class="btn btn-sm"
                               style="font-size:9px; padding:1px 6px; background:#f1f5f9; border:1px solid #cbd5e1; color:#334155;">

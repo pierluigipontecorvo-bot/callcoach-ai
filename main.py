@@ -175,4 +175,28 @@ async def root():
 
 @app.get("/health", tags=["root"])
 async def health():
-    return {"status": "healthy"}
+    """Health check + DB connectivity check."""
+    from database import AsyncSessionLocal
+    from sqlalchemy import text
+    db_ok = False
+    db_err = ""
+    try:
+        async with AsyncSessionLocal() as s:
+            await s.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception as exc:
+        db_err = str(exc)
+    return {"status": "healthy" if db_ok else "degraded", "db": db_ok, "db_error": db_err}
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Log full traceback for every unhandled 500 — visible in Railway logs."""
+    import traceback
+    from fastapi.responses import HTMLResponse
+    tb = traceback.format_exc()
+    logger.error("UNHANDLED 500 | %s %s\n%s", request.method, request.url, tb)
+    return HTMLResponse(
+        content=f"<h2>Internal Server Error</h2><pre>{tb}</pre>",
+        status_code=500,
+    )
