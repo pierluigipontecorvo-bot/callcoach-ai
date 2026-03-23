@@ -57,7 +57,7 @@ async def update_step(
             await sess.execute(
                 text("""
                     UPDATE analyses
-                    SET pipeline_steps = COALESCE(pipeline_steps, '{}') || :patch::jsonb
+                    SET pipeline_steps = COALESCE(pipeline_steps, '{}'::jsonb) || CAST(:patch AS jsonb)
                     WHERE id = :aid
                 """),
                 {"patch": patch_json, "aid": analysis_id},
