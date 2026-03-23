@@ -385,9 +385,16 @@ async def run_analysis_pipeline(
     # ── STEP 10: Download recordings ──────────────────────────────────────────
     await update_step(analysis_id, 10, "running", "Download registrazioni...")
 
+    # For old appointments (>1 day ago) recordings are already converted — no retry
+    from datetime import datetime as _dt, timezone as _tz
+    _is_old_appointment = (
+        appointment_dt is not None and
+        (_dt.now(_tz.utc) - appointment_dt.astimezone(_tz.utc)).days >= 1
+    )
+
     if not recordings:
-        # Try to wait for converting recordings
-        if sidial_stats["converting_recs"] > 0:
+        # Try to wait for converting recordings — ONLY for today's appointments
+        if sidial_stats["converting_recs"] > 0 and not _is_old_appointment:
             for attempt in range(1, retry_count + 1):
                 await update_step(
                     analysis_id, 10, "running",
