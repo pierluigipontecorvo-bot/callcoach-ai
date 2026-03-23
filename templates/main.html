@@ -110,6 +110,13 @@ function loadData(forceRefresh) {
   }
   if (forceRefresh) url += '&refresh=1';
   document.getElementById('btn-refresh').disabled = true;
+
+  /* Save per-row engine states before innerHTML replacement */
+  var _savedEngines = {};
+  document.querySelectorAll('[id^="row-engine-"]').forEach(function(el) {
+    if (el.value) _savedEngines[el.id.replace('row-engine-', '')] = el.value;
+  });
+
   fetch(url)
     .then(function(r){ return r.text(); })
     .then(function(html){
@@ -118,6 +125,16 @@ function loadData(forceRefresh) {
       document.getElementById('last-updated').textContent =
         'Agg. ' + n.getHours() + ':' + String(n.getMinutes()).padStart(2,'0');
       document.getElementById('btn-refresh').disabled = false;
+
+      /* Restore per-row engine states after reload */
+      Object.keys(_savedEngines).forEach(function(apptId) {
+        var val = _savedEngines[apptId];
+        ['row-engine-' + apptId, 'detail-engine-' + apptId].forEach(function(id) {
+          var el = document.getElementById(id);
+          if (el) el.value = val;
+        });
+      });
+
       applyClientFilter();
       schedulePolling();
     })

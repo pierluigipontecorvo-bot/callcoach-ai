@@ -74,9 +74,9 @@ def _login_redirect() -> RedirectResponse:
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    # Already authenticated → go straight to campaigns
+    # Already authenticated → go straight to main page
     if _is_admin(request):
-        return RedirectResponse(url="/admin/ui/campaigns", status_code=303)
+        return RedirectResponse(url="/admin/ui/main", status_code=303)
     return templates.TemplateResponse("login.html", {"request": request, "error": ""})
 
 
@@ -89,7 +89,7 @@ async def login_submit(request: Request, password: str = Form(...)):
             status_code=401,
         )
     token = create_access_token({"role": "admin", "sub": "admin"})
-    response = RedirectResponse(url="/admin/ui/campaigns", status_code=303)
+    response = RedirectResponse(url="/admin/ui/main", status_code=303)
     response.set_cookie(
         _COOKIE_NAME,
         token,
