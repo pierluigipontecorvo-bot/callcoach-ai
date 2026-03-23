@@ -982,16 +982,31 @@ async def appointments_data(
     # Existing analyses for these appointments — one query
     appt_ids = [str(a["id"]) for a in all_appts]
     if appt_ids:
-        ana_result = await db.execute(
-            select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
-                   Analysis.progress, Analysis.step_message, Analysis.created_at,
-                   Analysis.qualification_level, Analysis.pipeline_steps,
-                   Analysis.num_recordings, Analysis.total_talk_seconds,
-                   Analysis.label_name, Analysis.label_color)
-            .where(Analysis.appointment_id.in_(appt_ids))
-        )
-        analyses_map: dict[str, dict] = {
-            row.appointment_id: {
+        # Try full query first (with new columns); fall back to base columns if
+        # the DB migration hasn't run yet (avoids 500 on first deploy).
+        _full_cols = True
+        try:
+            ana_result = await db.execute(
+                select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
+                       Analysis.progress, Analysis.step_message, Analysis.created_at,
+                       Analysis.qualification_level, Analysis.pipeline_steps,
+                       Analysis.num_recordings, Analysis.total_talk_seconds,
+                       Analysis.label_name, Analysis.label_color)
+                .where(Analysis.appointment_id.in_(appt_ids))
+            )
+        except Exception as _qe:
+            logger.warning("analyses full query failed (missing columns?): %s — retrying base", _qe)
+            _full_cols = False
+            await db.rollback()
+            ana_result = await db.execute(
+                select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
+                       Analysis.progress, Analysis.step_message, Analysis.created_at,
+                       Analysis.qualification_level)
+                .where(Analysis.appointment_id.in_(appt_ids))
+            )
+
+        def _build_map_row(row) -> dict:
+            return {
                 "status": row.processing_status,
                 "id": row.id,
                 "progress": row.progress or 0,
@@ -999,12 +1014,15 @@ async def appointments_data(
                 "created_at": row.created_at,
                 "created_display": row.created_at.strftime("%d/%m/%Y %H:%M") if row.created_at else "—",
                 "qualification_level": row.qualification_level or "",
-                "pipeline_steps": row.pipeline_steps or {},
-                "num_recordings": row.num_recordings or 0,
-                "total_talk_seconds": row.total_talk_seconds or 0,
-                "label_name": row.label_name or "",
-                "label_color": row.label_color or "",
+                "pipeline_steps": (row.pipeline_steps or {}) if _full_cols else {},
+                "num_recordings": (row.num_recordings or 0) if _full_cols else 0,
+                "total_talk_seconds": (row.total_talk_seconds or 0) if _full_cols else 0,
+                "label_name": (row.label_name or "") if _full_cols else "",
+                "label_color": (row.label_color or "") if _full_cols else "",
             }
+
+        analyses_map: dict[str, dict] = {
+            row.appointment_id: _build_map_row(row)
             for row in ana_result.all()
         }
     else:
@@ -1217,14 +1235,23 @@ async def appointments_status_poll(request: Request, db: AsyncSession = Depends(
     from utils.helpers import utcnow
     import datetime
     cutoff = utcnow() - datetime.timedelta(days=30)
-    result = await db.execute(
-        select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
-               Analysis.qualification_level, Analysis.progress, Analysis.step_message)
-        .where(or_(
-            Analysis.processing_status.in_(["processing", "pending"]),
-            Analysis.updated_at >= cutoff,
-        ))
-    )
+    try:
+        result = await db.execute(
+            select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
+                   Analysis.qualification_level, Analysis.progress, Analysis.step_message)
+            .where(or_(
+                Analysis.processing_status.in_(["processing", "pending"]),
+                Analysis.updated_at >= cutoff,
+            ))
+        )
+    except Exception as _pe:
+        logger.warning("status-poll: updated_at column missing? %s — fallback", _pe)
+        await db.rollback()
+        result = await db.execute(
+            select(Analysis.appointment_id, Analysis.processing_status, Analysis.id,
+                   Analysis.qualification_level, Analysis.progress, Analysis.step_message)
+            .where(Analysis.processing_status.in_(["processing", "pending"]))
+        )
     rows = result.all()
     items = [
         {

@@ -23,19 +23,17 @@ async def lifespan(app: FastAPI):
     from database import AsyncSessionLocal as _ASL
 
     async def _run_sql(sql: str, label: str):
-        """Run a single SQL statement with a 6s hard timeout."""
+        """Run a single SQL statement with a 20s hard timeout. Non-fatal."""
         try:
             async def _exec():
                 async with _ASL() as s:
-                    await s.execute(_text("SET LOCAL statement_timeout = '5000'"))
                     r = await s.execute(_text(sql))
                     await s.commit()
                     return getattr(r, "rowcount", 0)
-            rows = await _asyncio.wait_for(_exec(), timeout=6.0)
-            if rows:
-                logger.info("Migration '%s': %d row(s) affected", label, rows)
+            rows = await _asyncio.wait_for(_exec(), timeout=20.0)
+            logger.info("Migration '%s': OK (%d rows)", label, rows or 0)
         except Exception as exc:
-            logger.warning("Migration '%s' failed (non-fatal): %s", label, exc)
+            logger.warning("Migration '%s' FAILED (non-fatal): %s", label, exc)
 
     await _run_sql(
         "UPDATE campaigns SET active = TRUE WHERE active IS NULL",
