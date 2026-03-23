@@ -90,7 +90,8 @@ async def transcribe_with_assemblyai(
                 "audio_url": upload_url,
                 "speaker_labels": True,
                 "language_code": "it",
-                "speech_model": "best",   # richiesto per speaker diarization su italiano
+                # speech_model "best" (slam-1) only supports English — omit to use
+                # Universal-2 which supports Italian + speaker diarization
             },
         )
         transcript_resp.raise_for_status()
