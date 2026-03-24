@@ -389,7 +389,7 @@ async def _run_pipeline_inner(
         return
 
     # ── STEP 9: Search Sidial ─────────────────────────────────────────────────
-    await update_step(analysis_id, 9, "running", "Ricerca lead su Sidial...")
+    await update_step(analysis_id, 9, "running", f"Ricerca lead su Sidial (tel: {phone})...")
 
     try:
         lookback = int(await get_setting("sidial_lookback_days", "90"))
@@ -400,19 +400,29 @@ async def _run_pipeline_inner(
         logger.warning("[%s] Could not read settings: %s — using defaults", appointment_id, exc)
         lookback, min_secs, retry_count, retry_wait = 90, 20, 5, 180
 
+    import asyncio as _asyncio
     try:
-        recordings, sidial_stats = await find_and_download_all_recordings(
-            phone=phone,
-            campaign_code=campaign_info.get("raw"),
-            lookback_days=lookback,
-            piva=piva or "",
-            ragione_sociale=ragione_sociale or "",
-            last_name=last_name if not form_fields else "",
-            min_call_seconds=min_secs,
-            return_stats=True,
+        recordings, sidial_stats = await _asyncio.wait_for(
+            find_and_download_all_recordings(
+                phone=phone,
+                campaign_code=campaign_info.get("raw"),
+                lookback_days=lookback,
+                piva=piva or "",
+                ragione_sociale=ragione_sociale or "",
+                last_name=last_name if not form_fields else "",
+                min_call_seconds=min_secs,
+                return_stats=True,
+            ),
+            timeout=120,  # max 2 minuti per tutta la ricerca Sidial
         )
+    except _asyncio.TimeoutError:
+        msg = f"Timeout Sidial dopo 120s — tel: {phone}"
+        logger.error("[%s] %s", appointment_id, msg)
+        await update_step(analysis_id, 9, "stop", msg)
+        await _save_error(analysis_id, appointment_id, msg, acuity_account)
+        return
     except Exception as exc:
-        msg = f"Errore Sidial: {exc}"
+        msg = f"Errore Sidial: {type(exc).__name__}: {exc}"
         logger.error("[%s] %s", appointment_id, msg, exc_info=True)
         await update_step(analysis_id, 9, "stop", msg)
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
@@ -426,8 +436,9 @@ async def _run_pipeline_inner(
     )
 
     if sidial_stats["leads_found"] == 0:
-        await update_step(analysis_id, 9, "stop", f"Nessun lead trovato — {stats_msg}")
-        await _save_error(analysis_id, appointment_id, "Nessun lead trovato su Sidial", acuity_account)
+        msg_no_lead = f"Nessun lead trovato su Sidial per tel: {phone} — {stats_msg}"
+        await update_step(analysis_id, 9, "stop", msg_no_lead)
+        await _save_error(analysis_id, appointment_id, msg_no_lead, acuity_account)
         return
     elif sidial_stats.get("search_params_used", 3) < 2:
         await update_step(analysis_id, 9, "warning", f"Lead trovati con parametri parziali — {stats_msg}")

@@ -48,51 +48,49 @@ def _normalize_phone(raw: str) -> str:
 
 # ── Ricerca lead per telefono / P.IVA ────────────────────────────────────────
 
+async def _search_one_phone_field(client: httpx.AsyncClient, field: str, phone: str) -> list[dict]:
+    """Cerca lead per un singolo campo telefono. Usato in parallelo."""
+    params_json = json.dumps([{"table": "leads", "field": field, "operator": "=", "value": phone}])
+    form_body = {"a": "searchLeads", "apiToken": _TOKEN, "params": params_json}
+    try:
+        resp = await client.post(_BASE, data=form_body)
+        if resp.status_code != 200:
+            logger.warning("searchLeads HTTP %s per field=%s", resp.status_code, field)
+            return []
+        data = resp.json()
+        if isinstance(data, dict):
+            if data.get("response", {}).get("error"):
+                return []
+            if "results" in data:
+                return data["results"]
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception as exc:
+        logger.warning("searchLeads fallito per %s=%s: %s", field, phone, exc)
+        return []
+
+
 async def _search_leads_by_phone(phone: str) -> list[dict]:
     """
-    POST a=searchLeads con filtro JSON esatto su phone1/phone2/phone3/phone4.
+    POST a=searchLeads su phone1/phone2/phone3/phone4 IN PARALLELO.
     Usa operator="=" per match esatto (non LIKE) → evita OOM.
     Restituisce lista di lead (di solito 0 o 1 elemento).
     """
-    # Cerca in tutti i campi telefono
-    filters = [
-        {"table": "leads", "field": field, "operator": "=", "value": phone}
-        for field in ("phone1", "phone2", "phone3", "phone4")
-    ]
+    import asyncio
+    fields = ("phone1", "phone2", "phone3", "phone4")
+    logger.info("searchLeads: ricerca parallela phone=%s su %s", phone, fields)
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        all_results = await asyncio.gather(
+            *[_search_one_phone_field(client, f, phone) for f in fields],
+            return_exceptions=True,
+        )
 
     results: list[dict] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # searchLeads con OR implicito su più chiamate separate (AND non supporta OR)
-        for flt in filters:
-            params_json = json.dumps([flt])
-            form_body = {"a": "searchLeads", "apiToken": _TOKEN, "params": params_json}
-            logger.info(
-                "searchLeads POST url=%s body_keys=%s", _BASE, list(form_body.keys())
-            )
-            try:
-                resp = await client.post(_BASE, data=form_body)
-                if resp.status_code != 200:
-                    logger.error(
-                        "searchLeads HTTP %s per field=%s body=%s",
-                        resp.status_code, flt["field"], resp.text[:500],
-                    )
-                    continue
-                data = resp.json()
-                # Risposta: {"response": {"error": false, "totLeads": N}, "results": [...]}
-                if isinstance(data, dict):
-                    if data.get("response", {}).get("error"):
-                        logger.debug(
-                            "searchLeads field=%s: %s", flt["field"],
-                            data.get("response", {}).get("message", "errore sconosciuto"),
-                        )
-                    elif "results" in data:
-                        results.extend(data["results"])
-                    elif isinstance(data, list):
-                        results.extend(data)
-                elif isinstance(data, list):
-                    results.extend(data)
-            except Exception as exc:
-                logger.error("searchLeads fallito per %s=%s: %s", flt["field"], phone, exc)
+    for r in all_results:
+        if isinstance(r, list):
+            results.extend(r)
 
     # Deduplica per leadId
     seen: set = set()
