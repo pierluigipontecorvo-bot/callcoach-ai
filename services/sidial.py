@@ -272,6 +272,14 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str) -> O
             except Exception:
                 pass
             return None
+        # Rifiuta risposte HTML/XML (pagine di errore Sidial)
+        if any(t in content_type for t in ("text/html", "text/xml", "text/plain")):
+            logger.warning("%s: risposta non-audio content-type=%s — scartata", label, content_type)
+            return None
+        # Verifica che inizi con header audio valido (non testo/HTML)
+        if resp.content[:1] in (b"<", b"\n", b"\r"):
+            logger.warning("%s: contenuto sembra HTML/testo (inizia con %r) — scartato", label, resp.content[:20])
+            return None
         if len(resp.content) > 1000:
             return resp.content
         return None

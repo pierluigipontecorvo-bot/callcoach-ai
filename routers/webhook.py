@@ -551,9 +551,14 @@ async def _run_pipeline_inner(
                         _obj.qualification_level = "errore_tecnico"
                         _obj.error_message = reason
                         _obj.transcript = transcript
+                        _obj.num_recordings = n_recs
+                        _obj.total_talk_seconds = total_secs
                         _obj.report_json = {
                             "errore_tecnico": True,
                             "motivo": reason,
+                            "registrazioni_scaricate": n_recs,
+                            "secondi_totali": total_secs,
+                            "motore_trascrizione": _engine,
                             "qualificazione": {
                                 "rating": 1, "label": "INSUFFICIENTE",
                                 "fuori_parametro": False,
