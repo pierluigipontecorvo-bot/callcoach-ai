@@ -400,32 +400,21 @@ async def _run_pipeline_inner(
         logger.warning("[%s] Could not read settings: %s — using defaults", appointment_id, exc)
         lookback, min_secs, retry_count, retry_wait = 90, 20, 5, 180
 
-    import asyncio as _asyncio
-
     async def _step9_progress(msg):
         await update_step(analysis_id, 9, "running", f"Sidial: {msg}")
 
     try:
-        recordings, sidial_stats = await _asyncio.wait_for(
-            find_and_download_all_recordings(
-                phone=phone,
-                campaign_code=campaign_info.get("raw"),
-                lookback_days=lookback,
-                piva=piva or "",
-                ragione_sociale=ragione_sociale or "",
-                last_name=last_name if not form_fields else "",
-                min_call_seconds=min_secs,
-                return_stats=True,
-                progress_cb=_step9_progress,
-            ),
-            timeout=120,  # max 2 minuti per tutta la ricerca Sidial
+        recordings, sidial_stats = await find_and_download_all_recordings(
+            phone=phone,
+            campaign_code=campaign_info.get("raw"),
+            lookback_days=lookback,
+            piva=piva or "",
+            ragione_sociale=ragione_sociale or "",
+            last_name=last_name if not form_fields else "",
+            min_call_seconds=min_secs,
+            return_stats=True,
+            progress_cb=_step9_progress,
         )
-    except _asyncio.TimeoutError:
-        msg = f"Timeout Sidial dopo 120s — tel: {phone}"
-        logger.error("[%s] %s", appointment_id, msg)
-        await update_step(analysis_id, 9, "stop", msg)
-        await _save_error(analysis_id, appointment_id, msg, acuity_account)
-        return
     except Exception as exc:
         msg = f"Errore Sidial: {type(exc).__name__}: {exc}"
         logger.error("[%s] %s", appointment_id, msg, exc_info=True)
