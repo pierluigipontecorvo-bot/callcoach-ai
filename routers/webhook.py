@@ -21,7 +21,11 @@ Acuity Scheduling webhook receiver + background analysis pipeline.
 import asyncio
 import json
 import logging
+import time as _time_mod
 from urllib.parse import parse_qs
+
+# Versione pipeline — visibile nello step 1 per verificare deploy
+_PIPELINE_VERSION = "v2024-03-24c"
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -249,7 +253,7 @@ async def _run_pipeline_inner(
     await init_steps(analysis_id)
 
     # Mark steps 1-3 as ok (they happened before pipeline was invoked)
-    await update_step(analysis_id, 1, "ok", "Webhook ricevuto")
+    await update_step(analysis_id, 1, "ok", f"Webhook ricevuto ({_PIPELINE_VERSION})")
     await update_step(analysis_id, 2, "ok", "Firma valida")
     await update_step(analysis_id, 3, "ok", f"Appuntamento {appointment_id} recuperato da Acuity")
 
@@ -401,20 +405,38 @@ async def _run_pipeline_inner(
         lookback, min_secs, retry_count, retry_wait = 90, 20, 5, 180
 
     async def _step9_progress(msg):
-        await update_step(analysis_id, 9, "running", f"Sidial: {msg}")
+        """Progress callback con timeout 3s — NON deve bloccare la pipeline."""
+        try:
+            await asyncio.wait_for(
+                update_step(analysis_id, 9, "running", f"Sidial: {msg}"),
+                timeout=3.0,
+            )
+        except Exception:
+            pass  # Se il DB è lento, ignoriamo — la pipeline continua
 
+    _sidial_start = _time_mod.monotonic()
     try:
-        recordings, sidial_stats = await find_and_download_all_recordings(
-            phone=phone,
-            campaign_code=campaign_info.get("raw"),
-            lookback_days=lookback,
-            piva=piva or "",
-            ragione_sociale=ragione_sociale or "",
-            last_name=last_name if not form_fields else "",
-            min_call_seconds=min_secs,
-            return_stats=True,
-            progress_cb=_step9_progress,
+        recordings, sidial_stats = await asyncio.wait_for(
+            find_and_download_all_recordings(
+                phone=phone,
+                campaign_code=campaign_info.get("raw"),
+                lookback_days=lookback,
+                piva=piva or "",
+                ragione_sociale=ragione_sociale or "",
+                last_name=last_name if not form_fields else "",
+                min_call_seconds=min_secs,
+                return_stats=True,
+                progress_cb=_step9_progress,
+            ),
+            timeout=120,  # backup: 120s hard wall-clock dal webhook
         )
+    except asyncio.TimeoutError:
+        elapsed = int(_time_mod.monotonic() - _sidial_start)
+        msg = f"Sidial TIMEOUT dopo {elapsed}s — la ricerca ha impiegato troppo tempo"
+        logger.error("[%s] %s", appointment_id, msg)
+        await update_step(analysis_id, 9, "stop", msg)
+        await _save_error(analysis_id, appointment_id, msg, acuity_account)
+        return
     except Exception as exc:
         msg = f"Errore Sidial: {type(exc).__name__}: {exc}"
         logger.error("[%s] %s", appointment_id, msg, exc_info=True)
