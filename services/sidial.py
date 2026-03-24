@@ -8,8 +8,15 @@ Flusso:
 
 Parametri sempre in GET salvo azioni che richiedono POST (searchLeads, searchRecs).
 Auth: apiToken come query param in GET, oppure nel body in POST.
+
+STRATEGIA RICERCA (fail-fast):
+  1. Telefono esatto (4 campi in parallelo) — 3 varianti formato
+  2. Se 0 lead → LIKE con ultimi 9 digit (4 campi in parallelo)
+  3. Solo se 0 lead → P.IVA / Ragione Sociale (in parallelo tra loro)
+  SHORT-CIRCUIT: appena troviamo lead, ci fermiamo.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -25,10 +32,15 @@ logger = logging.getLogger(__name__)
 _BASE  = settings.sidial_api_url.rstrip("/")
 _TOKEN = settings.sidial_api_token
 
+# Timeout aggressivi: connect 5s, read 10s — meglio fallire veloce che bloccare
+_SEARCH_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=5.0, pool=10.0)
+
+_PHONE_FIELDS = ("phone1", "phone2", "phone3", "phone4")
+
 
 def _log_config() -> None:
     logger.info("Sidial config: BASE=%s token_len=%d", _BASE, len(_TOKEN))
-
 
 
 # ── Normalizzazione telefono ──────────────────────────────────────────────────
@@ -46,16 +58,50 @@ def _normalize_phone(raw: str) -> str:
     return digits
 
 
-# ── Ricerca lead per telefono / P.IVA ────────────────────────────────────────
+def _phone_variants(raw: str) -> list[str]:
+    """
+    Genera varianti del numero di telefono da cercare su Sidial.
+    Sidial potrebbe aver salvato il numero in qualsiasi formato.
+    Es. input "+39 333 1234567" → ["3331234567", "393331234567", "00393331234567"]
+    """
+    norm = _normalize_phone(raw)
+    if not norm:
+        return []
+    variants = [norm]
+    # Con prefisso +39
+    with_39 = f"39{norm}"
+    if with_39 not in variants:
+        variants.append(with_39)
+    # Con prefisso 0039
+    with_0039 = f"0039{norm}"
+    if with_0039 not in variants:
+        variants.append(with_0039)
+    # Originale solo-digit (potrebbe essere diverso dal normalizzato)
+    raw_digits = re.sub(r"\D", "", raw)
+    if raw_digits and raw_digits not in variants:
+        variants.append(raw_digits)
+    return variants
 
-async def _search_one_phone_field(client: httpx.AsyncClient, field: str, phone: str) -> list[dict]:
-    """Cerca lead per un singolo campo telefono. Usato in parallelo."""
-    params_json = json.dumps([{"table": "leads", "field": field, "operator": "=", "value": phone}])
-    form_body = {"a": "searchLeads", "apiToken": _TOKEN, "params": params_json}
+
+# ── Singola ricerca API ──────────────────────────────────────────────────────
+
+async def _search_leads_single(
+    client: httpx.AsyncClient,
+    field: str,
+    value: str,
+    operator: str = "=",
+) -> list[dict]:
+    """Una singola chiamata searchLeads. Restituisce lista lead o []."""
+    params_json = json.dumps([{
+        "table": "leads", "field": field, "operator": operator, "value": value,
+    }])
     try:
-        resp = await client.post(_BASE, data=form_body)
+        resp = await client.post(
+            _BASE, data={"a": "searchLeads", "apiToken": _TOKEN, "params": params_json},
+        )
         if resp.status_code != 200:
-            logger.warning("searchLeads HTTP %s per field=%s", resp.status_code, field)
+            logger.warning("searchLeads HTTP %s field=%s op=%s val=%s",
+                           resp.status_code, field, operator, value[:30])
             return []
         data = resp.json()
         if isinstance(data, dict):
@@ -66,115 +112,162 @@ async def _search_one_phone_field(client: httpx.AsyncClient, field: str, phone: 
         if isinstance(data, list):
             return data
         return []
+    except httpx.TimeoutException:
+        logger.warning("searchLeads TIMEOUT field=%s op=%s val=%s", field, operator, value[:30])
+        return []
     except Exception as exc:
-        logger.warning("searchLeads fallito per %s=%s: %s", field, phone, exc)
+        logger.warning("searchLeads ERRORE field=%s val=%s: %s", field, value[:30], exc)
         return []
 
 
-async def _search_leads_by_phone(phone: str) -> list[dict]:
-    """
-    POST a=searchLeads su phone1/phone2/phone3/phone4 IN PARALLELO.
-    Usa operator="=" per match esatto (non LIKE) → evita OOM.
-    Restituisce lista di lead (di solito 0 o 1 elemento).
-    """
-    import asyncio
-    fields = ("phone1", "phone2", "phone3", "phone4")
-    logger.info("searchLeads: ricerca parallela phone=%s su %s", phone, fields)
+def _dedup_leads(leads: list[dict]) -> list[dict]:
+    """Deduplica lead per ID."""
+    seen: set = set()
+    unique: list[dict] = []
+    for lead in leads:
+        lid = str(lead.get("id") or "")
+        if lid and lid not in seen:
+            seen.add(lid)
+            unique.append(lead)
+    return unique
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        all_results = await asyncio.gather(
-            *[_search_one_phone_field(client, f, phone) for f in fields],
-            return_exceptions=True,
-        )
 
-    results: list[dict] = []
-    for r in all_results:
+# ── Ricerche composite ───────────────────────────────────────────────────────
+
+async def _search_phone_exact(client: httpx.AsyncClient, phone_variant: str) -> list[dict]:
+    """Cerca UN formato telefono su tutti i phone1-4 in parallelo."""
+    tasks = [_search_leads_single(client, f, phone_variant) for f in _PHONE_FIELDS]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    all_leads: list[dict] = []
+    for r in results:
         if isinstance(r, list):
-            results.extend(r)
-
-    # Deduplica per leadId
-    seen: set = set()
-    unique: list[dict] = []
-    for lead in results:
-        lead_id = str(lead.get("id") or "")
-        if lead_id and lead_id not in seen:
-            seen.add(lead_id)
-            unique.append(lead)
-
-    logger.info("searchLeads: trovati %d lead per phone=%s", len(unique), phone)
-    return unique
+            all_leads.extend(r)
+    return _dedup_leads(all_leads)
 
 
-async def _search_leads_by_ragione_sociale(ragione_sociale: str) -> list[dict]:
+async def _search_phone_like(client: httpx.AsyncClient, last_digits: str) -> list[dict]:
+    """Cerca con LIKE gli ultimi digit su phone1-4 in parallelo."""
+    tasks = [_search_leads_single(client, f, last_digits, operator="like") for f in _PHONE_FIELDS]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    all_leads: list[dict] = []
+    for r in results:
+        if isinstance(r, list):
+            all_leads.extend(r)
+    return _dedup_leads(all_leads)
+
+
+async def _search_piva(client: httpx.AsyncClient, piva: str) -> list[dict]:
+    """Cerca P.IVA — prova i 3 campi più probabili IN PARALLELO."""
+    piva_fields = ("vat", "piva", "partitaiva")
+    tasks = [_search_leads_single(client, f, piva) for f in piva_fields]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    all_leads: list[dict] = []
+    for r in results:
+        if isinstance(r, list):
+            all_leads.extend(r)
+    return _dedup_leads(all_leads)
+
+
+async def _search_ragione_sociale(client: httpx.AsyncClient, rs: str) -> list[dict]:
+    """Cerca Ragione Sociale — prova i 3 campi più probabili IN PARALLELO con LIKE."""
+    rs_fields = ("companyName", "company", "ragioneSociale")
+    tasks = [_search_leads_single(client, f, rs, operator="like") for f in rs_fields]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    all_leads: list[dict] = []
+    for r in results:
+        if isinstance(r, list):
+            all_leads.extend(r)
+    return _dedup_leads(all_leads)
+
+
+# ── Raccolta lead con SHORT-CIRCUIT ──────────────────────────────────────────
+
+async def _collect_all_leads(
+    phone: str,
+    piva: str = "",
+    ragione_sociale: str = "",
+    last_name: str = "",
+) -> tuple[list[dict], int, str]:
     """
-    POST a=searchLeads cercando per Ragione Sociale nei campi comuni Sidial.
-    Usa LIKE (contains) perché il nome potrebbe essere parziale.
+    Cerca lead su Sidial con strategia fail-fast:
+      1. Telefono esatto (3+ varianti formato, tutte in parallelo)
+      2. Telefono LIKE (ultimi 9 digit)
+      3. P.IVA + Ragione Sociale (solo se telefono non ha trovato nulla)
+
+    SHORT-CIRCUIT: appena troviamo lead, ci fermiamo.
+
+    Returns: (leads, search_params_used, search_method)
     """
-    rs_fields = ("companyName", "company", "ragioneSociale", "businessName", "name", "ragione_sociale")
-    results: list[dict] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for field in rs_fields:
-            params_json = json.dumps([{"table": "leads", "field": field, "operator": "like", "value": ragione_sociale}])
-            try:
-                resp = await client.post(_BASE, data={"a": "searchLeads", "apiToken": _TOKEN, "params": params_json})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, dict) and not data.get("response", {}).get("error") and data.get("results"):
-                        logger.info("searchLeads RS: trovati %d lead in campo '%s' per rs=%s",
-                                    len(data["results"]), field, ragione_sociale)
-                        results.extend(data["results"])
-                        break
-            except Exception as exc:
-                logger.warning("searchLeads RS fallito campo=%s: %s", field, exc)
+    variants = _phone_variants(phone)
+    logger.info("Sidial: varianti telefono da cercare: %s", variants)
 
-    seen: set = set()
-    unique: list[dict] = []
-    for lead in results:
-        lead_id = str(lead.get("id") or "")
-        if lead_id and lead_id not in seen:
-            seen.add(lead_id)
-            unique.append(lead)
-    return unique
+    async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
 
+        # ── FASE 1: match esatto su tutte le varianti in parallelo ────────
+        if variants:
+            all_phone_tasks = []
+            for v in variants:
+                for f in _PHONE_FIELDS:
+                    all_phone_tasks.append(_search_leads_single(client, f, v))
 
-async def _search_leads_by_piva(piva: str) -> list[dict]:
-    """
-    POST a=searchLeads cercando la P.IVA in campi comuni Sidial.
-    Usato come fallback quando la ricerca per telefono non trova nulla.
-    """
-    # Prova i campi più probabili dove Sidial potrebbe salvare la P.IVA
-    piva_fields = ("vat", "piva", "fiscal_code", "codfis", "partitaiva", "taxid", "cf")
-    results: list[dict] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for field in piva_fields:
-            params_json = json.dumps([{"table": "leads", "field": field, "operator": "=", "value": piva}])
-            try:
-                resp = await client.post(_BASE, data={"a": "searchLeads", "apiToken": _TOKEN, "params": params_json})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, dict) and not data.get("response", {}).get("error") and "results" in data:
-                        if data["results"]:
-                            logger.info("searchLeads P.IVA: trovati %d lead in campo '%s' per piva=%s",
-                                        len(data["results"]), field, piva)
-                            results.extend(data["results"])
-                            break  # trovato, non serve continuare
-                    logger.debug("searchLeads P.IVA: campo '%s' non ha trovato nulla per piva=%s", field, piva)
-            except Exception as exc:
-                logger.warning("searchLeads P.IVA fallito campo=%s: %s", field, exc)
+            logger.info("Sidial FASE 1: %d ricerche telefono esatte in parallelo", len(all_phone_tasks))
+            all_results = await asyncio.gather(*all_phone_tasks, return_exceptions=True)
 
-    seen: set = set()
-    unique: list[dict] = []
-    for lead in results:
-        lead_id = str(lead.get("id") or "")
-        if lead_id and lead_id not in seen:
-            seen.add(lead_id)
-            unique.append(lead)
-    return unique
+            all_leads: list[dict] = []
+            for r in all_results:
+                if isinstance(r, list):
+                    all_leads.extend(r)
+            leads = _dedup_leads(all_leads)
+
+            if leads:
+                logger.info("Sidial FASE 1 OK: %d lead trovati con telefono esatto", len(leads))
+                return leads, 1, "telefono_esatto"
+
+        # ── FASE 2: LIKE con ultimi 9 digit ──────────────────────────────
+        norm = _normalize_phone(phone)
+        if len(norm) >= 9:
+            last9 = norm[-9:]
+            logger.info("Sidial FASE 2: ricerca LIKE con ultimi 9 digit=%s", last9)
+            leads = await _search_phone_like(client, last9)
+            if leads:
+                logger.info("Sidial FASE 2 OK: %d lead trovati con LIKE %s", len(leads), last9)
+                return leads, 1, f"telefono_like_{last9}"
+
+        # ── FASE 3: P.IVA e Ragione Sociale in parallelo (fallback) ──────
+        fallback_tasks = []
+        fallback_labels = []
+
+        if piva:
+            fallback_tasks.append(_search_piva(client, piva))
+            fallback_labels.append(f"piva={piva}")
+        if ragione_sociale:
+            fallback_tasks.append(_search_ragione_sociale(client, ragione_sociale))
+            fallback_labels.append(f"rs={ragione_sociale}")
+        if not fallback_tasks and last_name:
+            fallback_tasks.append(_search_ragione_sociale(client, last_name))
+            fallback_labels.append(f"lastName={last_name}")
+
+        if fallback_tasks:
+            logger.info("Sidial FASE 3: %d ricerche fallback in parallelo (%s)",
+                        len(fallback_tasks), ", ".join(fallback_labels))
+            fallback_results = await asyncio.gather(*fallback_tasks, return_exceptions=True)
+            all_leads = []
+            for r in fallback_results:
+                if isinstance(r, list):
+                    all_leads.extend(r)
+            leads = _dedup_leads(all_leads)
+            if leads:
+                logger.info("Sidial FASE 3 OK: %d lead trovati con fallback", len(leads))
+                return leads, len([r for r in fallback_results if isinstance(r, list) and r]), "fallback_piva_rs"
+
+    logger.warning("Sidial: NESSUN lead trovato con nessuna strategia (phone=%s piva=%s rs=%s)",
+                   phone, piva or "—", ragione_sociale or "—")
+    return [], 0, "nessuno"
 
 
 # ── Ricerca registrazioni per leadId ─────────────────────────────────────────
 
-async def _search_recs_by_lead(lead_id: str) -> list[dict]:
+async def _search_recs_by_lead(client: httpx.AsyncClient, lead_id: str) -> list[dict]:
     """
     POST a=searchRecs con filtro JSON su leadsRecs.lead = {leadId}.
     Restituisce lista di record con campi: id, createdWhen, callLength, fileName, ecc.
@@ -182,44 +275,36 @@ async def _search_recs_by_lead(lead_id: str) -> list[dict]:
     filters = [{"table": "leadsRecs", "field": "lead", "operator": "=", "value": int(lead_id)}]
     params_json = json.dumps(filters)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            resp = await client.post(
-                _BASE,
-                data={"a": "searchRecs", "apiToken": _TOKEN, "params": params_json},
-            )
-            # 404 = nessuna registrazione per questo lead → risposta normale, non errore
-            if resp.status_code == 404:
-                logger.info("searchRecs: nessuna registrazione per leadId=%s", lead_id)
-                return []
-            if resp.status_code != 200:
-                logger.error(
-                    "searchRecs HTTP %s per leadId=%s body=%s",
-                    resp.status_code, lead_id, resp.text[:500],
-                )
-                return []
-            data = resp.json()
-            logger.info("searchRecs raw response leadId=%s: %s", lead_id, str(data)[:300])
-            # Risposta può essere lista diretta o {"response":{...},"results":[...]}
-            if isinstance(data, list):
-                logger.info("searchRecs: %d registrazioni per leadId=%s", len(data), lead_id)
-                return data
-            if isinstance(data, dict):
-                if data.get("response", {}).get("error"):
-                    logger.info(
-                        "searchRecs nessuna rec per leadId=%s: %s",
-                        lead_id, data.get("response", {}).get("message", "?"),
-                    )
-                    return []
-                if "results" in data:
-                    recs = data["results"]
-                    logger.info("searchRecs: %d registrazioni per leadId=%s", len(recs), lead_id)
-                    return recs
-            logger.warning("searchRecs risposta inattesa per leadId=%s: %s", lead_id, str(data)[:300])
+    try:
+        resp = await client.post(
+            _BASE,
+            data={"a": "searchRecs", "apiToken": _TOKEN, "params": params_json},
+        )
+        if resp.status_code == 404:
+            logger.info("searchRecs: nessuna registrazione per leadId=%s", lead_id)
             return []
-        except Exception as exc:
-            logger.error("searchRecs fallito per leadId=%s: %s", lead_id, exc)
+        if resp.status_code != 200:
+            logger.error("searchRecs HTTP %s per leadId=%s", resp.status_code, lead_id)
             return []
+        data = resp.json()
+        if isinstance(data, list):
+            logger.info("searchRecs: %d registrazioni per leadId=%s", len(data), lead_id)
+            return data
+        if isinstance(data, dict):
+            if data.get("response", {}).get("error"):
+                return []
+            if "results" in data:
+                recs = data["results"]
+                logger.info("searchRecs: %d registrazioni per leadId=%s", len(recs), lead_id)
+                return recs
+        logger.warning("searchRecs risposta inattesa per leadId=%s: %s", lead_id, str(data)[:300])
+        return []
+    except httpx.TimeoutException:
+        logger.warning("searchRecs TIMEOUT per leadId=%s", lead_id)
+        return []
+    except Exception as exc:
+        logger.error("searchRecs fallito per leadId=%s: %s", lead_id, exc)
+        return []
 
 
 def _parse_rec_datetime(rec: dict) -> Optional[datetime]:
@@ -291,9 +376,9 @@ async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
     Tenta di scaricare l'audio di una registrazione Sidial.
     Prova più strategie in sequenza fino a trovare un file audio valido.
     """
-    base_host = _BASE.split("/api.php")[0]  # es. https://effoncall.sidial.cloud
+    base_host = _BASE.split("/api.php")[0]
 
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
 
         # 1. GET standard
         url_std = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
@@ -311,9 +396,6 @@ async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
         # 3. POST a=getLeadRec
         try:
             resp = await client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN})
-            logger.info("getLeadRec POST id=%s → HTTP %s content-type=%s len=%d",
-                        rec_id, resp.status_code,
-                        resp.headers.get("content-type", "?"), len(resp.content))
             if resp.status_code == 200 and len(resp.content) > 1000:
                 ct = resp.headers.get("content-type", "")
                 if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
@@ -322,28 +404,20 @@ async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
         except Exception as exc:
             logger.warning("getLeadRec POST fallito rec_id=%s: %s", rec_id, exc)
 
-        # 4. URL diretti basati sul fileName (percorsi comuni Sidial)
+        # 4. URL diretti basati sul fileName
         if file_name:
             name = file_name.strip()
-            # Estrai data dal nome file (YYYYMMDD_...)
             date_prefix = name[:8] if len(name) >= 8 and name[:8].isdigit() else ""
             candidate_paths = [
                 f"/recordings/{name}",
                 f"/recordings/{name}.mp3",
                 f"/recordings/{name}.wav",
-                f"/audio/{name}",
-                f"/audio/{name}.mp3",
-                f"/rec/{name}",
-                f"/rec/{name}.mp3",
-                f"/media/{name}",
-                f"/media/{name}.mp3",
             ]
             if date_prefix and len(date_prefix) == 8:
                 yr, mo, dy = date_prefix[:4], date_prefix[4:6], date_prefix[6:8]
                 candidate_paths += [
                     f"/recordings/{yr}/{mo}/{dy}/{name}.mp3",
                     f"/recordings/{yr}/{mo}/{dy}/{name}.wav",
-                    f"/recordings/{yr}-{mo}-{dy}/{name}.mp3",
                 ]
             for path in candidate_paths:
                 url = f"{base_host}{path}"
@@ -352,7 +426,7 @@ async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
                     if resp.status_code == 200 and len(resp.content) > 1000:
                         ct = resp.headers.get("content-type", "")
                         if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
-                            logger.info("Audio scaricato via percorso diretto %s per rec_id=%s", path, rec_id)
+                            logger.info("Audio scaricato via percorso %s per rec_id=%s", path, rec_id)
                             return resp.content
                 except Exception:
                     pass
@@ -362,73 +436,6 @@ async def _download_rec(rec_id: str, file_name: str = "") -> Optional[bytes]:
 
 
 # ── Facciata pubblica ─────────────────────────────────────────────────────────
-
-async def _collect_all_leads(
-    phone: str,
-    piva: str = "",
-    ragione_sociale: str = "",
-    last_name: str = "",
-) -> tuple[list[dict], int]:
-    """
-    Cerca lead su Sidial con tutti i parametri disponibili nell'ordine:
-    1. phone (normalizzato)
-    2. phone (originale se diverso)
-    3. P.IVA
-    4. Ragione Sociale
-    5. lastName (fallback se form assente)
-    Restituisce (lista lead unici, search_params_used).
-    """
-    seen_ids: set = set()
-    all_leads: list[dict] = []
-    search_params_used = 0
-
-    def _add_leads(new_leads: list[dict], source: str) -> int:
-        added = 0
-        for lead in new_leads:
-            lid = str(lead.get("id") or "")
-            if lid and lid not in seen_ids:
-                seen_ids.add(lid)
-                all_leads.append(lead)
-                added += 1
-        if added:
-            logger.info("Sidial: +%d lead nuovi da ricerca per %s", added, source)
-        return added
-
-    norm_phone = _normalize_phone(phone)
-
-    # 1. Telefono normalizzato
-    leads = await _search_leads_by_phone(norm_phone)
-    if _add_leads(leads, f"phone={norm_phone}"):
-        search_params_used += 1
-
-    # 2. Telefono originale (se diverso)
-    if norm_phone != phone and not leads:
-        leads2 = await _search_leads_by_phone(phone)
-        if _add_leads(leads2, f"phone_orig={phone}"):
-            search_params_used += 1
-
-    # Form presente: cerca per P.IVA e Ragione Sociale
-    form_present = bool(piva or ragione_sociale)
-
-    if piva:
-        leads_piva = await _search_leads_by_piva(piva)
-        if _add_leads(leads_piva, f"piva={piva}"):
-            search_params_used += 1
-
-    if ragione_sociale:
-        leads_rs = await _search_leads_by_ragione_sociale(ragione_sociale)
-        if _add_leads(leads_rs, f"ragione_sociale={ragione_sociale}"):
-            search_params_used += 1
-
-    # Form assente: cerca per lastName come ricerca indipendente (non fallback)
-    if not form_present and last_name:
-        leads_ln = await _search_leads_by_ragione_sociale(last_name)
-        if _add_leads(leads_ln, f"lastName={last_name}"):
-            search_params_used += 1
-
-    logger.info("Sidial: totale %d lead unici trovati (search_params_used=%d)", len(all_leads), search_params_used)
-    return all_leads, search_params_used
-
 
 async def find_and_download_all_recordings(
     phone: str,
@@ -444,15 +451,7 @@ async def find_and_download_all_recordings(
 ) -> "list[Tuple[str, bytes]] | tuple[list[Tuple[str, bytes]], dict]":
     """
     Trova e scarica le registrazioni degli ultimi lookback_days giorni.
-
-    Ordine di ricerca lead (come da istruzione):
-      1. phone_top_level (normalizzato + originale)
-      2. P.IVA (dal form field "PARTITA IVA*")
-      3. Ragione Sociale (dal form field "RAGIONE SOCIALE*")
-      4. lastName (fallback se form assente)
-
-    Per ogni parametro raccoglie i lead, deduplica per ID, poi raccoglie
-    tutte le registrazioni, deduplica per rec_id, conta e scarica.
+    Usa strategia fail-fast con short-circuit.
     """
     from datetime import timedelta
 
@@ -462,12 +461,12 @@ async def find_and_download_all_recordings(
     cutoff = now_utc - timedelta(days=lookback_days)
 
     logger.info(
-        "Sidial: ricerca multi-parametro — phone=%s piva=%s rs=%s ultimi %d giorni",
-        norm_phone, piva or "—", ragione_sociale or "—", lookback_days,
+        "Sidial: ricerca — phone=%s (norm=%s) piva=%s rs=%s ultimi %d giorni",
+        phone, norm_phone, piva or "—", ragione_sociale or "—", lookback_days,
     )
 
-    # ── FASE A: raccogli tutti i lead unici da tutti i parametri ─────────────
-    all_leads, search_params_used = await _collect_all_leads(
+    # ── FASE A: raccogli lead con short-circuit ───────────────────────────
+    all_leads, search_params_used, search_method = await _collect_all_leads(
         phone=phone, piva=piva,
         ragione_sociale=ragione_sociale, last_name=last_name,
     )
@@ -475,33 +474,37 @@ async def find_and_download_all_recordings(
     _empty_stats = {
         "leads_found": 0, "total_recs": 0, "recent_recs": 0,
         "converting_recs": 0, "total_seconds": 0, "search_params_used": 0,
+        "search_method": "nessuno",
+        "phone_variants": _phone_variants(phone),
     }
 
     if not all_leads:
         logger.warning("Sidial: nessun lead trovato con nessun parametro")
         return ([], _empty_stats) if return_stats else []
 
-    # ── FASE B: raccogli tutte le registrazioni, deduplica per rec_id ────────
+    # ── FASE B: raccogli registrazioni (riusa un singolo client) ──────────
     seen_rec_ids: set = set()
     all_recs: list[dict] = []
-    for lead in all_leads:
-        lead_id = str(lead.get("id") or "")
-        if not lead_id:
-            continue
-        recs = await _search_recs_by_lead(lead_id)
-        for r in recs:
-            rid = str(r.get("id") or "")
-            if rid and rid not in seen_rec_ids:
-                seen_rec_ids.add(rid)
-                r["_lead_id"] = lead_id
-                all_recs.append(r)
+
+    async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
+        for lead in all_leads:
+            lead_id = str(lead.get("id") or "")
+            if not lead_id:
+                continue
+            recs = await _search_recs_by_lead(client, lead_id)
+            for r in recs:
+                rid = str(r.get("id") or "")
+                if rid and rid not in seen_rec_ids:
+                    seen_rec_ids.add(rid)
+                    r["_lead_id"] = lead_id
+                    all_recs.append(r)
 
     if not all_recs:
         logger.warning("Sidial: nessuna registrazione per %d lead trovati", len(all_leads))
-        _no_recs_stats = {**_empty_stats, "leads_found": len(all_leads)}
+        _no_recs_stats = {**_empty_stats, "leads_found": len(all_leads), "search_method": search_method}
         return ([], _no_recs_stats) if return_stats else []
 
-    # ── FASE C: filtra per lookback_days, ordina cronologicamente ────────────
+    # ── FASE C: filtra per lookback_days, ordina cronologicamente ─────────
     def _sort_key(r: dict) -> datetime:
         dt = _parse_rec_datetime(r)
         return dt if dt else datetime.min.replace(tzinfo=timezone.utc)
@@ -524,28 +527,22 @@ async def find_and_download_all_recordings(
         recs_to_download = all_recs_sorted[-1:]
         logger.warning("Sidial: nessuna registrazione recente — uso l'ultima disponibile")
 
-    # ── FASE D: filtra ringback puri, verifica converted ─────────────────────
-    _MIN_SEC = max(10, min_call_seconds)  # never filter below 10s absolute floor
+    # ── FASE D: filtra ringback puri, verifica converted ──────────────────
+    _MIN_SEC = max(10, min_call_seconds)
     useful = [r for r in recs_to_download if int(r.get("callLength") or 0) >= _MIN_SEC]
     if not useful:
         logger.warning("Sidial: filtro %ds ha eliminato tutto — uso tutte", _MIN_SEC)
         useful = recs_to_download
 
-    # Track recordings still being converted (converted != 'y') with length >= threshold
     pending_long = [
         r for r in useful
         if (r.get("converted") or "n").lower() != "y"
         and int(r.get("callLength") or 0) >= _MIN_SEC
     ]
-    if pending_long:
-        logger.warning(
-            "Sidial: %d registrazioni utili ancora in conversione: %s",
-            len(pending_long), [r.get("id") for r in pending_long],
-        )
 
     logger.info(
-        "Sidial: RIEPILOGO — %d lead | %d rec totali | %d recenti | %d da scaricare | %d in conversione",
-        len(all_leads), len(all_recs_sorted), len(recent), len(useful), len(pending_long),
+        "Sidial: RIEPILOGO — %d lead | %d rec totali | %d recenti | %d da scaricare | %d in conversione | metodo=%s",
+        len(all_leads), len(all_recs_sorted), len(recent), len(useful), len(pending_long), search_method,
     )
 
     # Build stats dict
@@ -556,9 +553,10 @@ async def find_and_download_all_recordings(
         "converting_recs": len(pending_long),
         "total_seconds": 0,
         "search_params_used": search_params_used,
+        "search_method": search_method,
     }
 
-    # ── FASE E: scarica ───────────────────────────────────────────────────────
+    # ── FASE E: scarica ──────────────────────────────────────────────────
     results: list[Tuple[str, bytes]] = []
     total_secs = 0
     for rec in useful:
@@ -571,12 +569,11 @@ async def find_and_download_all_recordings(
             continue
         audio_bytes = await _download_rec(rec_id, file_name=rec.get("fileName") or "")
         if audio_bytes:
-            # Coherence check: bytes should be >= callLength_seconds * 500 (rough floor)
             coherence_ok = len(audio_bytes) >= call_len * 500 if call_len > 0 else True
             if not coherence_ok:
                 logger.warning(
-                    "Sidial: rec_id=%s INCOERENTE — bytes=%d callLength=%ds (atteso>=%d)",
-                    rec_id, len(audio_bytes), call_len, call_len * 500,
+                    "Sidial: rec_id=%s INCOERENTE — bytes=%d callLength=%ds",
+                    rec_id, len(audio_bytes), call_len,
                 )
             results.append((rec_id, audio_bytes))
             total_secs += call_len

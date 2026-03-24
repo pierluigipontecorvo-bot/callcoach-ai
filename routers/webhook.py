@@ -428,15 +428,22 @@ async def _run_pipeline_inner(
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
         return
 
+    _method = sidial_stats.get("search_method", "?")
     stats_msg = (
         f"{sidial_stats['leads_found']} lead · "
         f"{sidial_stats['total_recs']} rec totali · "
         f"{sidial_stats['recent_recs']} recenti · "
-        f"{sidial_stats['converting_recs']} in conversione"
+        f"{sidial_stats['converting_recs']} in conversione · "
+        f"metodo: {_method}"
     )
 
     if sidial_stats["leads_found"] == 0:
-        msg_no_lead = f"Nessun lead trovato su Sidial per tel: {phone} — {stats_msg}"
+        _variants = sidial_stats.get("phone_variants", [])
+        msg_no_lead = (
+            f"Nessun lead trovato su Sidial — "
+            f"tel: {phone} · varianti provate: {_variants} · "
+            f"piva: {piva or '—'} · rs: {ragione_sociale or '—'}"
+        )
         await update_step(analysis_id, 9, "stop", msg_no_lead)
         await _save_error(analysis_id, appointment_id, msg_no_lead, acuity_account)
         return
