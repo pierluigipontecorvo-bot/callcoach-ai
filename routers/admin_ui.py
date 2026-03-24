@@ -1999,6 +1999,35 @@ async def save_operator(
     )
 
 
+# ── Diagnostica motore trascrizione ──────────────────────────────────────────
+
+@router.get("/settings/test-assemblyai", response_class=JSONResponse)
+async def test_assemblyai(request: Request):
+    """Quick diagnostic: verifica che la API key AssemblyAI sia valida."""
+    if not _is_admin(request):
+        return JSONResponse({"ok": False, "error": "Non autenticato"}, status_code=401)
+    import httpx
+    from config import settings as cfg
+    if not cfg.assemblyai_api_key:
+        return JSONResponse({"ok": False, "error": "ASSEMBLYAI_API_KEY non configurata (vuota)"})
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Endpoint leggero: ottieni info account
+            resp = await client.get(
+                "https://api.assemblyai.com/v2/transcript?limit=1",
+                headers={"authorization": cfg.assemblyai_api_key},
+            )
+            if resp.status_code == 200:
+                return JSONResponse({"ok": True, "message": f"API key valida (HTTP {resp.status_code})"})
+            else:
+                return JSONResponse({
+                    "ok": False,
+                    "error": f"HTTP {resp.status_code}: {resp.text[:300]}",
+                })
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
 # ── Pipeline steps endpoint ───────────────────────────────────────────────────
 
 @router.get("/analyses/{analysis_id}/pipeline-steps", response_class=JSONResponse)

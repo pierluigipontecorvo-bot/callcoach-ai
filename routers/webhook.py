@@ -506,6 +506,7 @@ async def _run_pipeline_inner(
     _engine = engine_override or _campaign_engine or global_engine
 
     transcript_parts = []
+    transcription_errors = []
     for idx, (call_id, audio_bytes) in enumerate(recordings, start=1):
         await update_step(
             analysis_id, 11, "running",
@@ -520,7 +521,9 @@ async def _run_pipeline_inner(
             transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n{part}")
             logger.info("[%s] Chiamata %d: %d caratteri", appointment_id, idx, len(part))
         except Exception as exc:
-            logger.error("[%s] Trascrizione fallita per call_id=%s: %s", appointment_id, call_id, exc)
+            err_detail = f"{type(exc).__name__}: {exc}"
+            logger.error("[%s] Trascrizione fallita per call_id=%s: %s", appointment_id, call_id, err_detail)
+            transcription_errors.append(err_detail)
             transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n[trascrizione non disponibile]")
 
     transcript = "\n\n".join(transcript_parts)
@@ -531,10 +534,11 @@ async def _run_pipeline_inner(
     _too_short = _clean_len < 80
 
     if _all_unavailable or _too_short:
+        _err_summary = "; ".join(transcription_errors[:3]) if transcription_errors else "nessun dettaglio"
         if _all_unavailable:
-            reason = f"Trascrizione fallita per tutte le {n_recs} registrazioni (motore: {_engine})"
+            reason = f"Trascrizione fallita per tutte le {n_recs} registrazioni (motore: {_engine}) — {_err_summary}"
         else:
-            reason = f"Trascrizione troppo breve: {_clean_len} caratteri da {n_recs} registrazioni"
+            reason = f"Trascrizione troppo breve: {_clean_len} caratteri da {n_recs} registrazioni — {_err_summary}"
 
         logger.warning("[%s] %s — testo: %r", appointment_id, reason, transcript[:300])
         await update_step(analysis_id, 11, "stop", reason)
