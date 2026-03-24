@@ -12,17 +12,14 @@ elif _db_url.startswith("postgres://"):
 engine = create_async_engine(
     _db_url,
     echo=False,
-    pool_pre_ping=True,
-    pool_size=3,           # ridotto: meno connessioni aperte verso PgBouncer
+    pool_pre_ping=False,   # disabilitato: causa problemi con PgBouncer/Supavisor
+    pool_size=3,
     max_overflow=5,
-    pool_timeout=30,       # max attesa per una connessione dal pool
+    pool_timeout=30,
     pool_recycle=300,      # ricicla connessioni ogni 5 min (evita stale connections)
     connect_args={
-        "command_timeout": 20,           # ogni singola query: max 20 secondi
-        "statement_cache_size": 0,       # ❗ CRITICO: disabilita prepared statements
-        # asyncpg di default usa prepared statements, ma Supabase usa PgBouncer
-        # in Transaction Mode che NON li supporta. Quando PgBouncer riassegna
-        # la connessione backend, il prepared statement è invalido → hang infinito.
+        "command_timeout": 15,           # ogni query: max 15 secondi
+        "statement_cache_size": 0,       # disabilita prepared statements per PgBouncer
     },
 )
 

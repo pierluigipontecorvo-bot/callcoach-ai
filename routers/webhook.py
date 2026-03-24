@@ -174,6 +174,38 @@ async def run_analysis_pipeline(
     acuity_account: int,
     engine_override: str | None = None,
 ):
+    """Safe wrapper — catches any unhandled exception and saves error to DB."""
+    appointment_id = str(appointment_data.get("id", "unknown"))
+    try:
+        await _run_pipeline_inner(appointment_data, acuity_account, engine_override)
+    except Exception as exc:
+        logger.exception("[%s] PIPELINE CRASH: %s", appointment_id, exc)
+        try:
+            from database import AsyncSessionLocal
+            from sqlalchemy import text
+            async with AsyncSessionLocal() as _sess:
+                async with _sess.begin():
+                    await _sess.execute(
+                        text("""
+                            UPDATE analyses
+                            SET processing_status = 'error',
+                                qualification_level = 'errore_tecnico',
+                                step_message = 'Pipeline crash: ' || LEFT(:err, 200),
+                                error_message = :err
+                            WHERE appointment_id = :appt_id
+                              AND processing_status = 'processing'
+                        """),
+                        {"appt_id": appointment_id, "err": str(exc)[:2000]},
+                    )
+        except Exception:
+            logger.error("[%s] Could not even save pipeline crash error", appointment_id)
+
+
+async def _run_pipeline_inner(
+    appointment_data: dict,
+    acuity_account: int,
+    engine_override: str | None = None,
+):
     """
     14-step analysis pipeline with semaphore status tracking.
 
@@ -246,14 +278,17 @@ async def run_analysis_pipeline(
     await update_step(analysis_id, 5, "running", "Lettura etichetta...")
     label_name, label_color = extract_label(appointment_data)
 
-    # Save form fields + label to DB
-    async with AsyncSessionLocal() as _sess:
-        async with _sess.begin():
-            _a = await _sess.get(Analysis, analysis_id)
-            if _a:
-                _a.acuity_form_fields = form_fields
-                _a.label_name = label_name or None
-                _a.label_color = label_color or None
+    # Save form fields + label to DB (non-fatal)
+    try:
+        async with AsyncSessionLocal() as _sess:
+            async with _sess.begin():
+                _a = await _sess.get(Analysis, analysis_id)
+                if _a:
+                    _a.acuity_form_fields = form_fields
+                    _a.label_name = label_name or None
+                    _a.label_color = label_color or None
+    except Exception as _e:
+        logger.warning("[%s] Save form fields fallito (non-fatale): %s", appointment_id, _e)
 
     if label_name:
         await update_step(analysis_id, 5, "ok", f"Etichetta: {label_name} ({label_color})")
@@ -295,14 +330,17 @@ async def run_analysis_pipeline(
     phone = extract_phone(appointment_data)
     last_name = appointment_data.get("lastName", "")
 
-    # Save initial info for UI display
+    # Save initial info for UI display (non-fatal)
     _initial_op_name = get_operator_display(appointment_data)
-    await _update_initial_info(
-        analysis_id,
-        campaign_code=campaign_info["raw"],
-        operator_name=_initial_op_name,
-        appointment_dt=appointment_dt,
-    )
+    try:
+        await _update_initial_info(
+            analysis_id,
+            campaign_code=campaign_info["raw"],
+            operator_name=_initial_op_name,
+            appointment_dt=appointment_dt,
+        )
+    except Exception as _e:
+        logger.warning("[%s] _update_initial_info fallito (non-fatale): %s", appointment_id, _e)
 
     # ── STEP 8: Identify operator ─────────────────────────────────────────────
     await update_step(analysis_id, 8, "running", "Identificazione operatore...")
@@ -448,14 +486,17 @@ async def run_analysis_pipeline(
     secs = total_secs % 60
     await update_step(analysis_id, 10, "ok", f"{n_recs} registrazioni · {mins}m {secs:02d}s parlato")
 
-    # Save recording stats
-    async with AsyncSessionLocal() as _sess:
-        async with _sess.begin():
-            _a = await _sess.get(Analysis, analysis_id)
-            if _a:
-                _a.num_recordings = n_recs
+    # Save recording stats (non-fatal)
+    try:
+        async with AsyncSessionLocal() as _sess:
+            async with _sess.begin():
+                _a = await _sess.get(Analysis, analysis_id)
+                if _a:
+                    _a.num_recordings = n_recs
                 _a.total_talk_seconds = total_secs
                 _a.sidial_call_id = ",".join(rec_id for rec_id, _ in recordings)
+    except Exception as _e:
+        logger.warning("[%s] Save recording stats fallito (non-fatale): %s", appointment_id, _e)
 
     # ── STEP 11: Transcription ────────────────────────────────────────────────
     await update_step(analysis_id, 11, "running", "Trascrizione in corso...")
@@ -514,12 +555,15 @@ async def run_analysis_pipeline(
 
     await update_step(analysis_id, 11, "ok", f"{len(transcript)} caratteri trascritti · motore: {_engine}")
 
-    # Save transcript
-    async with AsyncSessionLocal() as _sess:
-        async with _sess.begin():
-            _a = await _sess.get(Analysis, analysis_id)
-            if _a:
-                _a.transcript = transcript
+    # Save transcript (non-fatal — it will be saved again in _save_analysis)
+    try:
+        async with AsyncSessionLocal() as _sess:
+            async with _sess.begin():
+                _a = await _sess.get(Analysis, analysis_id)
+                if _a:
+                    _a.transcript = transcript
+    except Exception as _e:
+        logger.warning("[%s] Save transcript fallito (non-fatale): %s", appointment_id, _e)
 
     # ── STEP 12: AI Analysis ──────────────────────────────────────────────────
     await update_step(analysis_id, 12, "running", "Analisi AI in corso...")

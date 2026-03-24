@@ -1,6 +1,10 @@
 """
 Pipeline step tracking — salva lo stato di ogni fase nel DB.
 Status: pending | running | ok | warning | stop
+
+IMPORTANTE: update_step() e init_steps() NON rilanciano MAI eccezioni.
+Se il DB non è raggiungibile, l'errore viene loggato e ignorato.
+La pipeline deve poter continuare anche senza tracking dei passi.
 """
 import json
 import logging
@@ -37,46 +41,59 @@ async def update_step(
     message: str = "",
     detail: dict = None,
 ):
-    """Update a single pipeline step status in DB."""
-    from database import AsyncSessionLocal
-    from sqlalchemy import text
+    """Update a single pipeline step status in DB.
 
-    key = step_key(step)
-    data = {
-        "status": status,
-        "message": message,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-    if detail:
-        data["detail"] = detail
+    NEVER raises — any DB error is logged and swallowed so the pipeline
+    can keep running even when the DB is temporarily unreachable.
+    """
+    try:
+        from database import AsyncSessionLocal
+        from sqlalchemy import text
 
-    patch_json = json.dumps({key: data})
+        key = step_key(step)
+        data = {
+            "status": status,
+            "message": message,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        if detail:
+            data["detail"] = detail
 
-    async with AsyncSessionLocal() as sess:
-        async with sess.begin():
-            await sess.execute(
-                text("""
-                    UPDATE analyses
-                    SET pipeline_steps = COALESCE(pipeline_steps, '{}'::jsonb) || CAST(:patch AS jsonb)
-                    WHERE id = :aid
-                """),
-                {"patch": patch_json, "aid": analysis_id},
-            )
+        patch_json = json.dumps({key: data})
 
-    logger.debug("pipeline step %d=%s aid=%d msg=%s", step, status, analysis_id, message)
+        async with AsyncSessionLocal() as sess:
+            async with sess.begin():
+                await sess.execute(
+                    text("""
+                        UPDATE analyses
+                        SET pipeline_steps = COALESCE(pipeline_steps, '{}'::jsonb) || CAST(:patch AS jsonb)
+                        WHERE id = :aid
+                    """),
+                    {"patch": patch_json, "aid": analysis_id},
+                )
+
+        logger.debug("pipeline step %d=%s aid=%d msg=%s", step, status, analysis_id, message)
+    except Exception as exc:
+        logger.warning(
+            "update_step(%d, %d, %s) FAILED (non-fatal): %s",
+            analysis_id, step, status, exc,
+        )
 
 
 async def init_steps(analysis_id: int):
-    """Initialize all steps as pending."""
-    from database import AsyncSessionLocal
-    from sqlalchemy import text
+    """Initialize all steps as pending. NEVER raises."""
+    try:
+        from database import AsyncSessionLocal
+        from sqlalchemy import text
 
-    steps = {step_key(n): {"status": "pending", "message": ""} for n in range(1, 15)}
-    steps_json = json.dumps(steps)
+        steps = {step_key(n): {"status": "pending", "message": ""} for n in range(1, 15)}
+        steps_json = json.dumps(steps)
 
-    async with AsyncSessionLocal() as sess:
-        async with sess.begin():
-            await sess.execute(
-                text("UPDATE analyses SET pipeline_steps = :steps WHERE id = :aid"),
-                {"steps": steps_json, "aid": analysis_id},
-            )
+        async with AsyncSessionLocal() as sess:
+            async with sess.begin():
+                await sess.execute(
+                    text("UPDATE analyses SET pipeline_steps = :steps WHERE id = :aid"),
+                    {"steps": steps_json, "aid": analysis_id},
+                )
+    except Exception as exc:
+        logger.warning("init_steps(%d) FAILED (non-fatal): %s", analysis_id, exc)
