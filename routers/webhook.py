@@ -532,47 +532,79 @@ async def _run_pipeline_inner(
     except Exception as _e:
         logger.warning("[%s] Save recording stats fallito (non-fatale): %s", appointment_id, _e)
 
-    # ── STEP 11: Transcription ────────────────────────────────────────────────
+    # ── STEP 11: Transcription (CON FALLBACK AUTOMATICO) ──────────────────
     await update_step(analysis_id, 11, "running", "Trascrizione in corso...")
 
     _campaign_engine = campaign_db.transcription_engine if campaign_db.transcription_engine else None
     global_engine = await get_setting("transcription_engine", "openai")
     _engine = engine_override or _campaign_engine or global_engine
 
+    # Motore di fallback: se il primario fallisce, prova l'altro
+    _fallback_engine = "openai" if _engine == "assemblyai" else "assemblyai"
+
+    async def _transcribe_one(call_id: str, audio_bytes: bytes, idx: int, engine: str) -> tuple[str, bool]:
+        """Trascrive una chiamata. Restituisce (testo, successo)."""
+        try:
+            part = await transcribe_audio(audio_bytes, engine=engine)
+            if part and len(part.strip()) > 20:
+                return f"--- CHIAMATA {idx} (id: {call_id}) ---\n{part}", True
+            return f"--- CHIAMATA {idx} (id: {call_id}) ---\n[trascrizione vuota]", False
+        except Exception as exc:
+            logger.error("[%s] Trascrizione fallita call_id=%s engine=%s: %s",
+                        appointment_id, call_id, engine, exc)
+            return f"--- CHIAMATA {idx} (id: {call_id}) ---\n[trascrizione non disponibile]", False
+
     transcript_parts = []
-    transcription_errors = []
+    used_engine = _engine
+    primary_failures = 0
+
     for idx, (call_id, audio_bytes) in enumerate(recordings, start=1):
         await update_step(
             analysis_id, 11, "running",
-            f"Trascrizione chiamata {idx}/{n_recs} (motore: {_engine})...",
+            f"Trascrizione chiamata {idx}/{n_recs} (motore: {used_engine})...",
         )
-        try:
-            logger.info(
-                "[%s] Trascrizione chiamata %d/%d (call_id=%s, %d bytes, engine=%s) …",
-                appointment_id, idx, n_recs, call_id, len(audio_bytes), _engine,
+        logger.info("[%s] Trascrizione %d/%d (call_id=%s, %d bytes, engine=%s)",
+                    appointment_id, idx, n_recs, call_id, len(audio_bytes), used_engine)
+
+        text, ok = await _transcribe_one(call_id, audio_bytes, idx, used_engine)
+
+        # Se il motore primario fallisce, PROVA IL FALLBACK
+        if not ok and used_engine != _fallback_engine:
+            primary_failures += 1
+            logger.warning("[%s] Motore %s fallito — fallback a %s per chiamata %d",
+                          appointment_id, used_engine, _fallback_engine, idx)
+            await update_step(
+                analysis_id, 11, "running",
+                f"Fallback → {_fallback_engine} per chiamata {idx}/{n_recs}...",
             )
-            part = await transcribe_audio(audio_bytes, engine=_engine)
-            transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n{part}")
-            logger.info("[%s] Chiamata %d: %d caratteri", appointment_id, idx, len(part))
-        except Exception as exc:
-            err_detail = f"{type(exc).__name__}: {exc}"
-            logger.error("[%s] Trascrizione fallita per call_id=%s: %s", appointment_id, call_id, err_detail)
-            transcription_errors.append(err_detail)
-            transcript_parts.append(f"--- CHIAMATA {idx} (id: {call_id}) ---\n[trascrizione non disponibile]")
+            text, ok = await _transcribe_one(call_id, audio_bytes, idx, _fallback_engine)
+
+            # Se il fallback funziona, CAMBIA MOTORE per le prossime chiamate
+            if ok and primary_failures >= 1:
+                logger.warning("[%s] Motore %s fallisce — switch permanente a %s",
+                              appointment_id, _engine, _fallback_engine)
+                used_engine = _fallback_engine
+
+        transcript_parts.append(text)
+        if ok:
+            logger.info("[%s] Chiamata %d: %d caratteri (engine=%s)",
+                        appointment_id, idx, len(text), used_engine)
 
     transcript = "\n\n".join(transcript_parts)
-    logger.info("[%s] Trascrizione totale: %d caratteri", appointment_id, len(transcript))
+    logger.info("[%s] Trascrizione totale: %d caratteri (engine finale: %s)",
+                appointment_id, len(transcript), used_engine)
 
-    _all_unavailable = all("[trascrizione non disponibile]" in p for p in transcript_parts)
+    _all_unavailable = all("[trascrizione non disponibile]" in p or "[trascrizione vuota]" in p
+                           for p in transcript_parts)
     _clean_len = len(transcript.replace("\n", "").strip())
     _too_short = _clean_len < 80
 
     if _all_unavailable or _too_short:
-        _err_summary = "; ".join(transcription_errors[:3]) if transcription_errors else "nessun dettaglio"
         if _all_unavailable:
-            reason = f"Trascrizione fallita per tutte le {n_recs} registrazioni (motore: {_engine}) — {_err_summary}"
+            reason = (f"Trascrizione fallita con ENTRAMBI i motori ({_engine} + {_fallback_engine}) "
+                     f"per tutte le {n_recs} registrazioni")
         else:
-            reason = f"Trascrizione troppo breve: {_clean_len} caratteri da {n_recs} registrazioni — {_err_summary}"
+            reason = f"Trascrizione troppo breve: {_clean_len} caratteri da {n_recs} registrazioni"
 
         logger.warning("[%s] %s — testo: %r", appointment_id, reason, transcript[:300])
         await update_step(analysis_id, 11, "stop", reason)
@@ -608,7 +640,8 @@ async def _run_pipeline_inner(
             logger.error("[%s] Salvataggio errore_tecnico fallito: %s", appointment_id, _e)
         return
 
-    await update_step(analysis_id, 11, "ok", f"{len(transcript)} caratteri trascritti · motore: {_engine}")
+    _engine_note = f" (fallback da {_engine})" if used_engine != _engine else ""
+    await update_step(analysis_id, 11, "ok", f"{len(transcript)} caratteri · motore: {used_engine}{_engine_note}")
 
     # Save transcript (non-fatal — it will be saved again in _save_analysis)
     try:
