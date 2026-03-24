@@ -336,9 +336,20 @@ def _parse_rec_datetime(rec: dict) -> Optional[datetime]:
 
 # ── Download singola registrazione ────────────────────────────────────────────
 
-async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str) -> Optional[bytes]:
+def _time_left(deadline: float, max_sec: float = 15.0) -> float:
+    """Calcola secondi rimasti fino alla deadline, capped a max_sec. 0 se scaduta."""
+    if not deadline:
+        return max_sec
+    left = deadline - time.monotonic()
+    return max(0, min(left, max_sec))
+
+
+async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str, deadline: float = 0) -> Optional[bytes]:
+    t = _time_left(deadline, 15.0)
+    if t <= 0:
+        return None
     try:
-        resp = await asyncio.wait_for(client.get(url), timeout=30)
+        resp = await asyncio.wait_for(client.get(url), timeout=t)
         logger.info("%s → HTTP %s ct=%s len=%d",
                     label, resp.status_code,
                     resp.headers.get("content-type", "?"), len(resp.content))
@@ -351,23 +362,24 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str) -> O
                 for key in ("url", "recording_url", "audio_url", "file_url", "path"):
                     rec_url = data.get(key)
                     if rec_url:
-                        audio_resp = await asyncio.wait_for(client.get(rec_url), timeout=30)
+                        t2 = _time_left(deadline, 15.0)
+                        if t2 <= 0:
+                            return None
+                        audio_resp = await asyncio.wait_for(client.get(rec_url), timeout=t2)
                         if audio_resp.status_code == 200 and len(audio_resp.content) > 1000:
                             return audio_resp.content
             except Exception:
                 pass
             return None
         if any(t in content_type for t in ("text/html", "text/xml", "text/plain")):
-            logger.warning("%s: non-audio ct=%s", label, content_type)
             return None
         if resp.content[:1] in (b"<", b"\n", b"\r"):
-            logger.warning("%s: sembra HTML", label)
             return None
         if len(resp.content) > 1000:
             return resp.content
         return None
     except asyncio.TimeoutError:
-        logger.warning("%s: hard-timeout 30s", label)
+        logger.warning("%s: timeout %.0fs", label, t)
         return None
     except Exception as exc:
         logger.warning("%s fallito: %s", label, exc)
@@ -375,7 +387,7 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str) -> O
 
 
 async def _download_rec(rec_id: str, file_name: str = "", deadline: float = 0) -> Optional[bytes]:
-    if deadline and time.monotonic() > deadline:
+    if _time_left(deadline) <= 0:
         logger.warning("download_rec: deadline superata, skip rec_id=%s", rec_id)
         return None
 
@@ -383,51 +395,40 @@ async def _download_rec(rec_id: str, file_name: str = "", deadline: float = 0) -
 
     async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
 
-        # 1. GET standard
+        # 1. GET standard (strategia principale)
         url_std = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
-        audio = await _try_fetch_audio(client, url_std, f"getLeadRec id={rec_id}")
+        audio = await _try_fetch_audio(client, url_std, f"getLeadRec id={rec_id}", deadline)
         if audio:
             return audio
+
+        if _time_left(deadline) <= 0:
+            return None
 
         # 2. GET con raw=1
         url_raw = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}&raw=1"
-        audio = await _try_fetch_audio(client, url_raw, f"getLeadRec raw=1 id={rec_id}")
+        audio = await _try_fetch_audio(client, url_raw, f"getLeadRec raw=1 id={rec_id}", deadline)
         if audio:
             return audio
 
+        if _time_left(deadline) <= 0:
+            return None
+
         # 3. POST
-        try:
-            resp = await asyncio.wait_for(
-                client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN}),
-                timeout=30,
-            )
-            if resp.status_code == 200 and len(resp.content) > 1000:
-                ct = resp.headers.get("content-type", "")
-                if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
-                    return resp.content
-        except Exception as exc:
-            logger.warning("getLeadRec POST fallito rec_id=%s: %s", rec_id, exc)
+        t = _time_left(deadline, 15.0)
+        if t > 0:
+            try:
+                resp = await asyncio.wait_for(
+                    client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN}),
+                    timeout=t,
+                )
+                if resp.status_code == 200 and len(resp.content) > 1000:
+                    ct = resp.headers.get("content-type", "")
+                    if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
+                        return resp.content
+            except Exception as exc:
+                logger.warning("getLeadRec POST rec_id=%s: %s", rec_id, exc)
 
-        # 4. Percorsi diretti (solo primi 3)
-        if file_name:
-            name = file_name.strip()
-            for path in [f"/recordings/{name}", f"/recordings/{name}.mp3", f"/recordings/{name}.wav"]:
-                if deadline and time.monotonic() > deadline:
-                    break
-                url = f"{base_host}{path}"
-                try:
-                    resp = await asyncio.wait_for(
-                        client.get(url, headers={"Authorization": f"Bearer {_TOKEN}"}),
-                        timeout=15,
-                    )
-                    if resp.status_code == 200 and len(resp.content) > 1000:
-                        ct = resp.headers.get("content-type", "")
-                        if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
-                            return resp.content
-                except Exception:
-                    pass
-
-        logger.warning("Sidial: nessun audio per rec_id=%s", rec_id)
+        logger.warning("Sidial: nessun audio per rec_id=%s (deadline_left=%.0fs)", rec_id, _time_left(deadline))
         return None
 
 
@@ -501,12 +502,12 @@ async def find_and_download_all_recordings(
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         for i, lead in enumerate(all_leads):
             if time.monotonic() > deadline:
-                logger.warning("Sidial: deadline superata in FASE B dopo %d/%d lead", i, len(all_leads))
-                await _progress(f"Deadline {_GLOBAL_DEADLINE}s — interrotto dopo {i}/{len(all_leads)} lead")
+                await _progress(f"Deadline! Interrotto dopo {i}/{len(all_leads)} lead")
                 break
             lead_id = str(lead.get("id") or "")
             if not lead_id:
                 continue
+            await _progress(f"searchRecs lead {i+1}/{len(all_leads)} (id={lead_id})...")
             recs = await _search_recs_by_lead(client, lead_id, deadline=deadline)
             for r in recs:
                 rid = str(r.get("id") or "")
@@ -514,11 +515,14 @@ async def find_and_download_all_recordings(
                     seen_rec_ids.add(rid)
                     r["_lead_id"] = lead_id
                     all_recs.append(r)
+            elapsed_bi = int(time.monotonic() - t0)
+            await _progress(f"Lead {i+1}/{len(all_leads)}: {len(all_recs)} rec trovate ({elapsed_bi}s)")
 
     elapsed_b = int(time.monotonic() - t0)
 
     if not all_recs:
         logger.warning("Sidial: 0 registrazioni per %d lead (elapsed: %ds)", len(all_leads), elapsed_b)
+        await _progress(f"0 registrazioni trovate per {len(all_leads)} lead ({elapsed_b}s)")
         _no_recs_stats = {**_empty_stats, "leads_found": len(all_leads), "search_method": search_method, "elapsed_seconds": elapsed_b}
         return ([], _no_recs_stats) if return_stats else []
 
