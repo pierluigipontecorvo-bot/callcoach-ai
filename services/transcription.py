@@ -101,8 +101,7 @@ async def transcribe_with_assemblyai(
                 "audio_url": upload_url,
                 "speaker_labels": True,
                 "language_code": "it",
-                # speech_model "best" (slam-1) supporta SOLO inglese — non specificare
-                # per usare Universal-2 che supporta italiano + speaker diarization
+                "speech_model": "universal-2",
             },
         )
         if transcript_resp.status_code != 200:
