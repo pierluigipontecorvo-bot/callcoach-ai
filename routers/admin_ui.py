@@ -2136,6 +2136,41 @@ async def test_sidial(request: Request, phone: str = ""):
                     if found:
                         results["ok"] = True
                         results["match"] = f"{field}={variant}"
+                        # Testa searchRecs per il primo lead trovato
+                        try:
+                            lead_data = resp.json()
+                            lead_list = lead_data.get("results", lead_data) if isinstance(lead_data, dict) else lead_data
+                            if isinstance(lead_list, list) and lead_list:
+                                lead_id = str(lead_list[0].get("id", ""))
+                                if lead_id:
+                                    recs_filter = _json.dumps([{"table": "leadsRecs", "field": "lead", "operator": "=", "value": int(lead_id)}])
+                                    t0 = time.monotonic()
+                                    async with _httpx.AsyncClient(timeout=15.0) as rc:
+                                        recs_resp = await rc.post(
+                                            cfg.sidial_api_url,
+                                            data={"a": "searchRecs", "apiToken": cfg.sidial_api_token, "params": recs_filter},
+                                        )
+                                    recs_ms = int((time.monotonic() - t0) * 1000)
+                                    recs_body = recs_resp.text[:500]
+                                    recs_count = 0
+                                    try:
+                                        rd = recs_resp.json()
+                                        if isinstance(rd, list):
+                                            recs_count = len(rd)
+                                        elif isinstance(rd, dict) and "results" in rd:
+                                            recs_count = len(rd["results"])
+                                    except Exception:
+                                        pass
+                                    results["steps"].append({
+                                        "step": f"searchRecs lead_id={lead_id}",
+                                        "ok": recs_count > 0,
+                                        "ms": recs_ms,
+                                        "status": recs_resp.status_code,
+                                        "recs_count": recs_count,
+                                        "body_preview": recs_body,
+                                    })
+                        except Exception as rexc:
+                            results["steps"].append({"step": "searchRecs", "ok": False, "error": str(rexc)})
                         return JSONResponse(results)
                 except Exception as exc:
                     ms = int((time.monotonic() - t0) * 1000)
