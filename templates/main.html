@@ -77,6 +77,20 @@
 }
 .period-btn:hover  { background: #f0f3f8; color: #001126; border-color: #aaa; }
 .period-btn.active { background: #001126; border-color: #001126; color: #fff; }
+
+/* Pulsing dot — indica attività in corso */
+.pulse-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  animation: pulse-glow 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,.6); }
+  50%      { opacity: .6; box-shadow: 0 0 0 5px rgba(34,197,94,0); }
+}
 </style>
 <script>
 var _pollTimer     = null;
@@ -240,9 +254,11 @@ document.addEventListener('change', function(e) {
 });
 
 /* ── Polling ────────────────────────────────────────────── */
+var _analysisStartTimes = {};
+
 function schedulePolling() {
   if (_pollTimer) clearTimeout(_pollTimer);
-  _pollTimer = setTimeout(pollStatus, 8000);
+  _pollTimer = setTimeout(pollStatus, 4000);
 }
 function pollStatus() {
   fetch('/admin/ui/appointments/status-poll')
@@ -250,15 +266,79 @@ function pollStatus() {
     .then(function(data){
       _hasProcessing = data.has_processing;
       data.items.forEach(updateRowAvanz);
-      if (_hasProcessing) schedulePolling();
+      /* Aggiorna anche pipeline steps nei pannelli espansi */
+      if (_hasProcessing) {
+        _refreshExpandedPanels();
+        schedulePolling();
+      }
     })
     .catch(function(){ if (_hasProcessing) schedulePolling(); });
 }
+
+/* ── Refresh dei pipeline steps nei pannelli espansi ───── */
+function _refreshExpandedPanels() {
+  document.querySelectorAll('tr[id^="detail-"]').forEach(function(det) {
+    if (det.style.display === 'none') return;
+    var apptId = det.id.replace('detail-', '');
+    var row = document.querySelector('[data-appt-id="' + apptId + '"]');
+    if (!row) return;
+    /* Cerca se ha un'analisi in corso */
+    var cell = row.querySelector('.avanz-cell');
+    if (!cell || !cell.querySelector('.progress-bar')) return;
+    /* Ha pipeline steps? Cerca analysis_id dal link dettaglio */
+    var link = row.querySelector('a[href*="/analyses/"]');
+    if (!link) return;
+    var m = link.href.match(/\/analyses\/(\d+)/);
+    if (!m) return;
+    var analysisId = m[1];
+    fetch('/admin/ui/analyses/' + analysisId + '/pipeline-steps')
+      .then(function(r){ return r.json(); })
+      .then(function(data) {
+        if (!data.steps) return;
+        var grid = det.querySelector('[style*="grid-template-columns"]');
+        if (!grid) return;
+        var stepKeys = [
+          '1_webhook','2_firma','3_acuity','4_form',
+          '5_etichetta','6_data','7_campagna','8_operatore',
+          '9_sidial','10_download','11_trascrizione','12_analisi',
+          '13_salvataggio','14_email'
+        ];
+        var stepLabels = [
+          'Webhook','Firma','Acuity','Form',
+          'Etichetta','Data','Campagna','Operatore',
+          'Sidial','Download','Trascrizione','Analisi',
+          'Salvataggio','Email'
+        ];
+        var html = '';
+        for (var i = 0; i < 14; i++) {
+          var k = stepKeys[i];
+          var lbl = stepLabels[i];
+          var s = data.steps[k] || {};
+          var st = s.status || 'pending';
+          var sm = s.message || '';
+          var borderColor = st==='stop'?'#dc3545':st==='warning'?'#f59e0b':st==='ok'?'#d1fae5':'#e2e8f0';
+          var bgColor = st==='stop'?'#fff5f5':st==='warning'?'#fffbf0':st==='ok'?'#f0fdf4':'#fff';
+          var icon = st==='ok'?'\u2705':st==='warning'?'\u26a0\ufe0f':st==='stop'?'\ud83d\udd34':st==='running'?'<span class="pulse-dot"></span>':'\u23f3';
+          html += '<div style="background:'+bgColor+';border-radius:6px;padding:7px 10px;border:1px solid '+borderColor+';">';
+          html += '<div style="font-size:10px;font-weight:700;color:#001126;margin-bottom:2px;font-family:\'Space Grotesk\',sans-serif;">';
+          html += (i+1)+'\xb7'+lbl+' '+icon+'</div>';
+          if (sm) html += '<div style="font-size:9px;color:#708090;line-height:1.4;margin-top:1px;">'+sm+'</div>';
+          html += '</div>';
+        }
+        grid.innerHTML = html;
+      })
+      .catch(function(){});
+  });
+}
+
 function updateRowAvanz(item) {
   var cell = document.querySelector('[data-appt-id="' + item.appt_id + '"] .avanz-cell');
   if (!cell) return;
   var pct = item.progress || 0;
   var msg = item.step_message || 'In corso...';
+  if (item.status === 'completed' || item.status === 'error') {
+    delete _analysisStartTimes[item.appt_id];
+  }
   if (item.status === 'completed') {
     var ql = item.qualification_level || '';
     var extra = '';
@@ -270,16 +350,40 @@ function updateRowAvanz(item) {
       '<span class="badge ' + _qualClass(ql) + '" style="font-size:10px;">' + _qualLabel(ql) + '</span>' + extra;
   } else if (item.status === 'error') {
     var errMsg = msg ? '<div style="font-size:9px;color:#94a3b8;margin-top:2px;">' + msg + '</div>' : '';
-    cell.innerHTML = '<span class="badge bg-dark" style="font-size:10px;">❌ Errore tecnico</span>' + errMsg;
+    cell.innerHTML = '<span class="badge bg-dark" style="font-size:10px;">\u274c Errore tecnico</span>' + errMsg;
   } else {
+    /* Tracking tempo trascorso */
+    if (!_analysisStartTimes[item.appt_id]) {
+      _analysisStartTimes[item.appt_id] = Date.now();
+    }
+    var elapsed = Math.floor((Date.now() - _analysisStartTimes[item.appt_id]) / 1000);
+    var mins = Math.floor(elapsed / 60);
+    var secs = elapsed % 60;
+    var timerStr = mins + ':' + (secs < 10 ? '0' : '') + secs;
     cell.innerHTML =
-      '<div style="font-size:11px;color:#708090;margin-bottom:2px;">' + pct + '%</div>' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">' +
+        '<div style="font-size:11px;color:#708090;">' + pct + '%</div>' +
+        '<span class="pulse-dot"></span>' +
+        '<span class="elapsed-timer" style="font-size:10px;color:#94a3b8;font-family:monospace;">' + timerStr + '</span>' +
+      '</div>' +
       '<div class="progress" style="height:3px;margin-bottom:3px;">' +
         '<div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%;"></div>' +
       '</div>' +
       '<div style="font-size:10px;color:#708090;">Fase: ' + msg + '</div>';
   }
 }
+
+/* ── Timer ticker — aggiorna ogni secondo ──────────────── */
+setInterval(function() {
+  Object.keys(_analysisStartTimes).forEach(function(apptId) {
+    var el = document.querySelector('[data-appt-id="' + apptId + '"] .elapsed-timer');
+    if (!el) return;
+    var elapsed = Math.floor((Date.now() - _analysisStartTimes[apptId]) / 1000);
+    var mins = Math.floor(elapsed / 60);
+    var secs = elapsed % 60;
+    el.textContent = mins + ':' + (secs < 10 ? '0' : '') + secs;
+  });
+}, 1000);
 function _qualClass(ql) {
   return ({eccellente:'bg-success',buona:'bg-primary',sufficiente:'bg-info text-dark',
     da_migliorare:'bg-warning text-dark',inaccurata:'bg-danger',

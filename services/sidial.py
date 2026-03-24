@@ -187,6 +187,7 @@ async def _collect_all_leads(
     piva: str = "",
     ragione_sociale: str = "",
     last_name: str = "",
+    progress_cb=None,
 ) -> tuple[list[dict], int, str]:
     """
     Cerca lead su Sidial con strategia fail-fast:
@@ -195,16 +196,25 @@ async def _collect_all_leads(
       3. P.IVA + Ragione Sociale (solo se telefono non ha trovato nulla)
 
     SHORT-CIRCUIT: appena troviamo lead, ci fermiamo.
+    progress_cb: async callback(msg) per aggiornare lo step nella UI.
 
     Returns: (leads, search_params_used, search_method)
     """
     variants = _phone_variants(phone)
     logger.info("Sidial: varianti telefono da cercare: %s", variants)
 
+    async def _progress(msg):
+        if progress_cb:
+            try:
+                await progress_cb(msg)
+            except Exception:
+                pass
+
     async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
 
         # ── FASE 1: match esatto su tutte le varianti in parallelo ────────
         if variants:
+            await _progress(f"FASE 1: ricerca telefono esatto ({len(variants)} varianti × 4 campi)...")
             all_phone_tasks = []
             for v in variants:
                 for f in _PHONE_FIELDS:
@@ -221,17 +231,24 @@ async def _collect_all_leads(
 
             if leads:
                 logger.info("Sidial FASE 1 OK: %d lead trovati con telefono esatto", len(leads))
+                await _progress(f"FASE 1 OK: {len(leads)} lead trovati!")
                 return leads, 1, "telefono_esatto"
+
+            await _progress("FASE 1: nessun lead con match esatto")
 
         # ── FASE 2: LIKE con ultimi 9 digit ──────────────────────────────
         norm = _normalize_phone(phone)
         if len(norm) >= 9:
             last9 = norm[-9:]
+            await _progress(f"FASE 2: ricerca LIKE con ultimi 9 cifre ({last9})...")
             logger.info("Sidial FASE 2: ricerca LIKE con ultimi 9 digit=%s", last9)
             leads = await _search_phone_like(client, last9)
             if leads:
                 logger.info("Sidial FASE 2 OK: %d lead trovati con LIKE %s", len(leads), last9)
+                await _progress(f"FASE 2 OK: {len(leads)} lead trovati con LIKE!")
                 return leads, 1, f"telefono_like_{last9}"
+
+            await _progress("FASE 2: nessun lead con LIKE")
 
         # ── FASE 3: P.IVA e Ragione Sociale in parallelo (fallback) ──────
         fallback_tasks = []
@@ -248,6 +265,7 @@ async def _collect_all_leads(
             fallback_labels.append(f"lastName={last_name}")
 
         if fallback_tasks:
+            await _progress(f"FASE 3: fallback con {', '.join(fallback_labels)}...")
             logger.info("Sidial FASE 3: %d ricerche fallback in parallelo (%s)",
                         len(fallback_tasks), ", ".join(fallback_labels))
             fallback_results = await asyncio.gather(*fallback_tasks, return_exceptions=True)
@@ -258,10 +276,12 @@ async def _collect_all_leads(
             leads = _dedup_leads(all_leads)
             if leads:
                 logger.info("Sidial FASE 3 OK: %d lead trovati con fallback", len(leads))
+                await _progress(f"FASE 3 OK: {len(leads)} lead trovati!")
                 return leads, len([r for r in fallback_results if isinstance(r, list) and r]), "fallback_piva_rs"
 
     logger.warning("Sidial: NESSUN lead trovato con nessuna strategia (phone=%s piva=%s rs=%s)",
                    phone, piva or "—", ragione_sociale or "—")
+    await _progress("Nessun lead trovato con nessuna strategia")
     return [], 0, "nessuno"
 
 
@@ -448,6 +468,7 @@ async def find_and_download_all_recordings(
     last_name: str = "",
     min_call_seconds: int = 20,
     return_stats: bool = False,
+    progress_cb=None,
 ) -> "list[Tuple[str, bytes]] | tuple[list[Tuple[str, bytes]], dict]":
     """
     Trova e scarica le registrazioni degli ultimi lookback_days giorni.
@@ -469,6 +490,7 @@ async def find_and_download_all_recordings(
     all_leads, search_params_used, search_method = await _collect_all_leads(
         phone=phone, piva=piva,
         ragione_sociale=ragione_sociale, last_name=last_name,
+        progress_cb=progress_cb,
     )
 
     _empty_stats = {
@@ -483,6 +505,14 @@ async def find_and_download_all_recordings(
         return ([], _empty_stats) if return_stats else []
 
     # ── FASE B: raccogli registrazioni (riusa un singolo client) ──────────
+    async def _progress(msg):
+        if progress_cb:
+            try:
+                await progress_cb(msg)
+            except Exception:
+                pass
+
+    await _progress(f"{len(all_leads)} lead trovati — cerco registrazioni...")
     seen_rec_ids: set = set()
     all_recs: list[dict] = []
 

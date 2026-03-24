@@ -401,6 +401,10 @@ async def _run_pipeline_inner(
         lookback, min_secs, retry_count, retry_wait = 90, 20, 5, 180
 
     import asyncio as _asyncio
+
+    async def _step9_progress(msg):
+        await update_step(analysis_id, 9, "running", f"Sidial: {msg}")
+
     try:
         recordings, sidial_stats = await _asyncio.wait_for(
             find_and_download_all_recordings(
@@ -412,6 +416,7 @@ async def _run_pipeline_inner(
                 last_name=last_name if not form_fields else "",
                 min_call_seconds=min_secs,
                 return_stats=True,
+                progress_cb=_step9_progress,
             ),
             timeout=120,  # max 2 minuti per tutta la ricerca Sidial
         )

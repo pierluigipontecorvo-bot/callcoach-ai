@@ -276,7 +276,7 @@
                     {% if st == 'ok'      %}✅
                     {% elif st == 'warning' %}⚠️
                     {% elif st == 'stop'    %}🔴
-                    {% elif st == 'running' %}▶
+                    {% elif st == 'running' %}<span class="pulse-dot"></span>
                     {% else %}⏳{% endif %}
                   </div>
                   {% if sm %}
