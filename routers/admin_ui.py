@@ -2028,6 +2028,128 @@ async def test_assemblyai(request: Request):
         return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
+@router.get("/settings/test-sidial", response_class=JSONResponse)
+async def test_sidial(request: Request, phone: str = ""):
+    """
+    Diagnostica Sidial step-by-step:
+    1. DNS resolve
+    2. TCP connect
+    3. HTTP POST searchLeads (con telefono se fornito)
+    Mostra tempi esatti per ogni step.
+    """
+    if not _is_admin(request):
+        return JSONResponse({"ok": False, "error": "Non autenticato"}, status_code=401)
+    import socket
+    import time
+    import httpx as _httpx
+    import json as _json
+    from config import settings as cfg
+    from urllib.parse import urlparse
+
+    results = {"steps": [], "ok": False}
+    parsed = urlparse(cfg.sidial_api_url)
+    host = parsed.hostname
+
+    # Step 1: DNS
+    t0 = time.monotonic()
+    try:
+        ip = socket.gethostbyname(host)
+        dns_ms = int((time.monotonic() - t0) * 1000)
+        results["steps"].append({"step": "DNS", "ok": True, "ms": dns_ms, "ip": ip})
+    except Exception as exc:
+        dns_ms = int((time.monotonic() - t0) * 1000)
+        results["steps"].append({"step": "DNS", "ok": False, "ms": dns_ms, "error": str(exc)})
+        return JSONResponse(results)
+
+    # Step 2: TCP connect
+    t0 = time.monotonic()
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        sock = socket.create_connection((host, port), timeout=10)
+        tcp_ms = int((time.monotonic() - t0) * 1000)
+        sock.close()
+        results["steps"].append({"step": "TCP", "ok": True, "ms": tcp_ms, "port": port})
+    except Exception as exc:
+        tcp_ms = int((time.monotonic() - t0) * 1000)
+        results["steps"].append({"step": "TCP", "ok": False, "ms": tcp_ms, "error": str(exc)})
+        return JSONResponse(results)
+
+    # Step 3: HTTP POST searchLeads (una singola richiesta)
+    test_phone = phone or "0000000000"
+    params_json = _json.dumps([{"table": "leads", "field": "phone1", "operator": "=", "value": test_phone}])
+    t0 = time.monotonic()
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                cfg.sidial_api_url,
+                data={"a": "searchLeads", "apiToken": cfg.sidial_api_token, "params": params_json},
+            )
+        http_ms = int((time.monotonic() - t0) * 1000)
+        results["steps"].append({
+            "step": "HTTP POST searchLeads",
+            "ok": resp.status_code == 200,
+            "ms": http_ms,
+            "status": resp.status_code,
+            "body_preview": resp.text[:200],
+        })
+    except Exception as exc:
+        http_ms = int((time.monotonic() - t0) * 1000)
+        results["steps"].append({"step": "HTTP POST", "ok": False, "ms": http_ms, "error": str(exc)})
+        return JSONResponse(results)
+
+    # Step 4: Se telefono reale fornito, cerca e scarica prima registrazione
+    if phone and phone != "0000000000":
+        from services.sidial import _normalize_phone, _phone_variants
+        variants = _phone_variants(phone)
+        results["phone_variants"] = variants
+
+        # Cerca con ogni variante SEQUENZIALE
+        for variant in variants:
+            for field in ("phone1", "phone2", "phone3", "phone4"):
+                pj = _json.dumps([{"table": "leads", "field": field, "operator": "=", "value": variant}])
+                t0 = time.monotonic()
+                try:
+                    async with _httpx.AsyncClient(timeout=12.0) as client:
+                        resp = await client.post(
+                            cfg.sidial_api_url,
+                            data={"a": "searchLeads", "apiToken": cfg.sidial_api_token, "params": pj},
+                        )
+                    ms = int((time.monotonic() - t0) * 1000)
+                    body = resp.text[:300]
+                    found = False
+                    try:
+                        data = resp.json()
+                        if isinstance(data, list) and data:
+                            found = True
+                        elif isinstance(data, dict) and data.get("results"):
+                            found = True
+                    except Exception:
+                        pass
+                    results["steps"].append({
+                        "step": f"search {field}={variant}",
+                        "ok": found,
+                        "ms": ms,
+                        "status": resp.status_code,
+                        "found": found,
+                        "body_preview": body,
+                    })
+                    if found:
+                        results["ok"] = True
+                        results["match"] = f"{field}={variant}"
+                        return JSONResponse(results)
+                except Exception as exc:
+                    ms = int((time.monotonic() - t0) * 1000)
+                    results["steps"].append({
+                        "step": f"search {field}={variant}",
+                        "ok": False,
+                        "ms": ms,
+                        "error": str(exc),
+                    })
+
+    results["ok"] = True
+    return JSONResponse(results)
+
+
 # ── Pipeline steps endpoint ───────────────────────────────────────────────────
 
 @router.get("/analyses/{analysis_id}/pipeline-steps", response_class=JSONResponse)

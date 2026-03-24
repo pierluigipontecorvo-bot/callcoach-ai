@@ -149,22 +149,31 @@ def _dedup_leads(leads: list[dict]) -> list[dict]:
 # ── Ricerche composite ───────────────────────────────────────────────────────
 
 async def _search_phone_exact(client: httpx.AsyncClient, variants: list[str], deadline: float) -> list[dict]:
-    """Cerca TUTTE le varianti telefono su tutti i phone1-4 in parallelo."""
-    tasks = []
+    """
+    Cerca varianti telefono SEQUENZIALMENTE per variante, parallelo solo sui 4 campi.
+    Stop al primo risultato trovato (short-circuit per variante).
+    Max 4 richieste simultanee (non 12-16).
+    """
     for v in variants:
-        for f in _PHONE_FIELDS:
-            tasks.append(_search_leads_single(client, f, v, deadline=deadline))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    all_leads: list[dict] = []
-    for r in results:
-        if isinstance(r, list):
-            all_leads.extend(r)
-    return _dedup_leads(all_leads)
+        if deadline and time.monotonic() > deadline:
+            break
+        # 4 campi phone in parallelo per QUESTA variante
+        tasks = [_search_leads_single(client, f, v, deadline=deadline) for f in _PHONE_FIELDS]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        leads: list[dict] = []
+        for r in results:
+            if isinstance(r, list):
+                leads.extend(r)
+        deduped = _dedup_leads(leads)
+        if deduped:
+            logger.info("Sidial: trovati %d lead con variante=%s", len(deduped), v)
+            return deduped
+        logger.info("Sidial: 0 lead con variante=%s", v)
+    return []
 
 
 async def _search_phone_like(client: httpx.AsyncClient, last_digits: str, deadline: float) -> list[dict]:
-    """Cerca con LIKE gli ultimi digit su phone1-4 in parallelo."""
+    """Cerca con LIKE gli ultimi digit su phone1-4 (4 richieste parallele)."""
     tasks = [
         _search_leads_single(client, f, last_digits, operator="like", deadline=deadline)
         for f in _PHONE_FIELDS
@@ -175,6 +184,7 @@ async def _search_phone_like(client: httpx.AsyncClient, last_digits: str, deadli
         if isinstance(r, list):
             all_leads.extend(r)
     return _dedup_leads(all_leads)
+
 
 
 async def _search_fallback(client: httpx.AsyncClient, piva: str, ragione_sociale: str, last_name: str, deadline: float) -> list[dict]:
