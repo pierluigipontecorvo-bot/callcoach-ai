@@ -31,7 +31,7 @@ _TOKEN = settings.sidial_api_token
 
 # Timeout per singola HTTP call — httpx-level (backup)
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0)
-_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=5.0, pool=10.0)
+_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
 # Timeout DURO per singola HTTP call — asyncio.wait_for (primario, 100% affidabile)
 _CALL_TIMEOUT = 12  # secondi
@@ -387,46 +387,45 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str, dead
 
 
 async def _download_rec(rec_id: str, file_name: str = "", deadline: float = 0) -> Optional[bytes]:
+    """Scarica audio con UNA sola strategia e timeout stretto."""
     if _time_left(deadline) <= 0:
         logger.warning("download_rec: deadline superata, skip rec_id=%s", rec_id)
         return None
 
-    base_host = _BASE.split("/api.php")[0]
+    url = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
+    t = min(_time_left(deadline, 20.0), 20.0)  # max 20s per download
 
-    async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+    try:
+        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+            resp = await asyncio.wait_for(client.get(url), timeout=t)
 
-        # 1. GET standard (strategia principale)
-        url_std = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
-        audio = await _try_fetch_audio(client, url_std, f"getLeadRec id={rec_id}", deadline)
-        if audio:
-            return audio
+            if resp.status_code != 200:
+                logger.warning("download rec_id=%s: HTTP %s", rec_id, resp.status_code)
+                return None
 
-        if _time_left(deadline) <= 0:
-            return None
+            ct = resp.headers.get("content-type", "")
+            body = resp.content
 
-        # 2. GET con raw=1
-        url_raw = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}&raw=1"
-        audio = await _try_fetch_audio(client, url_raw, f"getLeadRec raw=1 id={rec_id}", deadline)
-        if audio:
-            return audio
+            # Rifiuta HTML/JSON/testo
+            if any(x in ct for x in ("text/html", "text/xml", "text/plain", "application/json")):
+                logger.warning("download rec_id=%s: content-type non audio: %s", rec_id, ct)
+                return None
+            if body[:1] in (b"<", b"{", b"["):
+                logger.warning("download rec_id=%s: contenuto non audio", rec_id)
+                return None
+            if len(body) < 1000:
+                logger.warning("download rec_id=%s: file troppo piccolo (%d bytes)", rec_id, len(body))
+                return None
 
-        if _time_left(deadline) <= 0:
-            return None
+            logger.info("download rec_id=%s OK: %d bytes, ct=%s", rec_id, len(body), ct)
+            return body
 
-        # 3. POST
-        t = _time_left(deadline, 15.0)
-        if t > 0:
-            try:
-                resp = await asyncio.wait_for(
-                    client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN}),
-                    timeout=t,
-                )
-                if resp.status_code == 200 and len(resp.content) > 1000:
-                    ct = resp.headers.get("content-type", "")
-                    if "application/json" not in ct and resp.content[:1] not in (b"{", b"["):
-                        return resp.content
-            except Exception as exc:
-                logger.warning("getLeadRec POST rec_id=%s: %s", rec_id, exc)
+    except asyncio.TimeoutError:
+        logger.warning("download rec_id=%s: TIMEOUT dopo %.0fs", rec_id, t)
+        return None
+    except Exception as exc:
+        logger.warning("download rec_id=%s: errore: %s", rec_id, exc)
+        return None
 
         logger.warning("Sidial: nessun audio per rec_id=%s (deadline_left=%.0fs)", rec_id, _time_left(deadline))
         return None
@@ -567,8 +566,8 @@ async def find_and_download_all_recordings(
         # Nessuna con durata sufficiente — usa la più lunga disponibile
         useful = [r for r in candidates if (r.get("converted") or "n").lower() == "y"][:1]
 
-    # LIMITE: scarica max 5 registrazioni (le più lunghe, già ordinate)
-    _MAX_DOWNLOAD = 5
+    # LIMITE: scarica max 2 registrazioni (le più lunghe = le chiamate vere)
+    _MAX_DOWNLOAD = 2
     useful = useful[:_MAX_DOWNLOAD]
 
     await _progress(f"{len(useful)} registrazioni da scaricare (max {_MAX_DOWNLOAD}, ordinate per durata)...")
@@ -591,7 +590,7 @@ async def find_and_download_all_recordings(
     }
 
     # ── FASE E: scarica (max 5, stop appena ne abbiamo 3 OK) ────────────
-    _MIN_GOOD = 3  # basta 3 registrazioni riuscite
+    _MIN_GOOD = 1  # basta 1 registrazione per l'analisi
     results: list[Tuple[str, bytes]] = []
     total_secs = 0
     failed = 0
