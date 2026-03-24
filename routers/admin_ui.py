@@ -2029,13 +2029,13 @@ async def test_assemblyai(request: Request):
 
 
 @router.get("/settings/test-sidial", response_class=JSONResponse)
-async def test_sidial(request: Request, phone: str = ""):
+async def test_sidial(request: Request, phone: str = "", piva: str = "", rs: str = ""):
     """
-    Diagnostica Sidial step-by-step:
-    1. DNS resolve
-    2. TCP connect
-    3. HTTP POST searchLeads (con telefono se fornito)
-    Mostra tempi esatti per ogni step.
+    Diagnostica Sidial COMPLETA:
+    1. DNS + TCP + HTTP base
+    2. Cerca TUTTE le varianti telefono su TUTTI i campi (phone1-4)
+    3. Cerca per P.IVA (7 campi) e Ragione Sociale (7 campi) se forniti
+    4. Per OGNI lead trovato: mostra campagna, telefoni, e conta registrazioni
     """
     if not _is_admin(request):
         return JSONResponse({"ok": False, "error": "Non autenticato"}, status_code=401)
@@ -2046,7 +2046,7 @@ async def test_sidial(request: Request, phone: str = ""):
     from config import settings as cfg
     from urllib.parse import urlparse
 
-    results = {"steps": [], "ok": False}
+    results = {"steps": [], "ok": False, "leads": [], "summary": {}}
     parsed = urlparse(cfg.sidial_api_url)
     host = parsed.hostname
 
@@ -2074,114 +2074,164 @@ async def test_sidial(request: Request, phone: str = ""):
         results["steps"].append({"step": "TCP", "ok": False, "ms": tcp_ms, "error": str(exc)})
         return JSONResponse(results)
 
-    # Step 3: HTTP POST searchLeads (una singola richiesta)
-    test_phone = phone or "0000000000"
-    params_json = _json.dumps([{"table": "leads", "field": "phone1", "operator": "=", "value": test_phone}])
-    t0 = time.monotonic()
-    try:
-        async with _httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                cfg.sidial_api_url,
-                data={"a": "searchLeads", "apiToken": cfg.sidial_api_token, "params": params_json},
-            )
-        http_ms = int((time.monotonic() - t0) * 1000)
-        results["steps"].append({
-            "step": "HTTP POST searchLeads",
-            "ok": resp.status_code == 200,
-            "ms": http_ms,
-            "status": resp.status_code,
-            "body_preview": resp.text[:200],
-        })
-    except Exception as exc:
-        http_ms = int((time.monotonic() - t0) * 1000)
-        results["steps"].append({"step": "HTTP POST", "ok": False, "ms": http_ms, "error": str(exc)})
-        return JSONResponse(results)
+    # ── Helper per searchLeads ──
+    async def _do_search(field: str, value: str, operator: str = "=") -> list[dict]:
+        pj = _json.dumps([{"table": "leads", "field": field, "operator": operator, "value": value}])
+        try:
+            async with _httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.post(
+                    cfg.sidial_api_url,
+                    data={"a": "searchLeads", "apiToken": cfg.sidial_api_token, "params": pj},
+                )
+            if resp.status_code not in (200, 404):
+                return []
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                if data.get("response", {}).get("error"):
+                    return []
+                if "results" in data:
+                    return data["results"]
+            return []
+        except Exception:
+            return []
 
-    # Step 4: Se telefono reale fornito, cerca e scarica prima registrazione
-    if phone and phone != "0000000000":
-        from services.sidial import _normalize_phone, _phone_variants
+    # ── Helper per searchRecs ──
+    async def _do_search_recs(lead_id: str) -> tuple[int, list[dict]]:
+        recs_filter = _json.dumps([{"table": "leadsRecs", "field": "lead", "operator": "=", "value": int(lead_id)}])
+        try:
+            async with _httpx.AsyncClient(timeout=15.0) as rc:
+                resp = await rc.post(
+                    cfg.sidial_api_url,
+                    data={"a": "searchRecs", "apiToken": cfg.sidial_api_token, "params": recs_filter},
+                )
+            if resp.status_code == 404:
+                return 0, []
+            data = resp.json()
+            if isinstance(data, list):
+                return len(data), data
+            if isinstance(data, dict) and "results" in data:
+                return len(data["results"]), data["results"]
+            return 0, []
+        except Exception:
+            return 0, []
+
+    # ── Raccolta lead da TUTTE le fonti ──
+    all_leads_map: dict[str, dict] = {}  # lead_id → lead data + metadata
+    search_log: list[dict] = []
+
+    # 3A. Ricerca telefono — TUTTE le varianti, TUTTI i campi
+    if phone:
+        from services.sidial import _phone_variants
         variants = _phone_variants(phone)
         results["phone_variants"] = variants
 
-        # Cerca con ogni variante SEQUENZIALE
         for variant in variants:
             for field in ("phone1", "phone2", "phone3", "phone4"):
-                pj = _json.dumps([{"table": "leads", "field": field, "operator": "=", "value": variant}])
                 t0 = time.monotonic()
-                try:
-                    async with _httpx.AsyncClient(timeout=12.0) as client:
-                        resp = await client.post(
-                            cfg.sidial_api_url,
-                            data={"a": "searchLeads", "apiToken": cfg.sidial_api_token, "params": pj},
-                        )
-                    ms = int((time.monotonic() - t0) * 1000)
-                    body = resp.text[:300]
-                    found = False
-                    try:
-                        data = resp.json()
-                        if isinstance(data, list) and data:
-                            found = True
-                        elif isinstance(data, dict) and data.get("results"):
-                            found = True
-                    except Exception:
-                        pass
-                    results["steps"].append({
-                        "step": f"search {field}={variant}",
-                        "ok": found,
-                        "ms": ms,
-                        "status": resp.status_code,
-                        "found": found,
-                        "body_preview": body,
-                    })
-                    if found:
-                        results["ok"] = True
-                        results["match"] = f"{field}={variant}"
-                        # Testa searchRecs per il primo lead trovato
-                        try:
-                            lead_data = resp.json()
-                            lead_list = lead_data.get("results", lead_data) if isinstance(lead_data, dict) else lead_data
-                            if isinstance(lead_list, list) and lead_list:
-                                lead_id = str(lead_list[0].get("id", ""))
-                                if lead_id:
-                                    recs_filter = _json.dumps([{"table": "leadsRecs", "field": "lead", "operator": "=", "value": int(lead_id)}])
-                                    t0 = time.monotonic()
-                                    async with _httpx.AsyncClient(timeout=15.0) as rc:
-                                        recs_resp = await rc.post(
-                                            cfg.sidial_api_url,
-                                            data={"a": "searchRecs", "apiToken": cfg.sidial_api_token, "params": recs_filter},
-                                        )
-                                    recs_ms = int((time.monotonic() - t0) * 1000)
-                                    recs_body = recs_resp.text[:500]
-                                    recs_count = 0
-                                    try:
-                                        rd = recs_resp.json()
-                                        if isinstance(rd, list):
-                                            recs_count = len(rd)
-                                        elif isinstance(rd, dict) and "results" in rd:
-                                            recs_count = len(rd["results"])
-                                    except Exception:
-                                        pass
-                                    results["steps"].append({
-                                        "step": f"searchRecs lead_id={lead_id}",
-                                        "ok": recs_count > 0,
-                                        "ms": recs_ms,
-                                        "status": recs_resp.status_code,
-                                        "recs_count": recs_count,
-                                        "body_preview": recs_body,
-                                    })
-                        except Exception as rexc:
-                            results["steps"].append({"step": "searchRecs", "ok": False, "error": str(rexc)})
-                        return JSONResponse(results)
-                except Exception as exc:
-                    ms = int((time.monotonic() - t0) * 1000)
-                    results["steps"].append({
-                        "step": f"search {field}={variant}",
-                        "ok": False,
-                        "ms": ms,
-                        "error": str(exc),
-                    })
+                leads = await _do_search(field, variant)
+                ms = int((time.monotonic() - t0) * 1000)
+                found_ids = [str(l.get("id", "")) for l in leads]
+                search_log.append({
+                    "search": f"{field}={variant}",
+                    "found": len(leads),
+                    "ms": ms,
+                    "lead_ids": found_ids,
+                })
+                for l in leads:
+                    lid = str(l.get("id", ""))
+                    if lid and lid not in all_leads_map:
+                        all_leads_map[lid] = {**l, "_found_via": f"tel:{field}={variant}"}
 
-    results["ok"] = True
+    # 3B. Ricerca P.IVA (7 campi)
+    if piva:
+        piva_fields = ("vat", "piva", "partitaiva", "fiscal_code", "codfis", "taxid", "cf")
+        for field in piva_fields:
+            t0 = time.monotonic()
+            leads = await _do_search(field, piva)
+            ms = int((time.monotonic() - t0) * 1000)
+            found_ids = [str(l.get("id", "")) for l in leads]
+            search_log.append({
+                "search": f"piva:{field}={piva}",
+                "found": len(leads),
+                "ms": ms,
+                "lead_ids": found_ids,
+            })
+            for l in leads:
+                lid = str(l.get("id", ""))
+                if lid and lid not in all_leads_map:
+                    all_leads_map[lid] = {**l, "_found_via": f"piva:{field}"}
+
+    # 3C. Ricerca Ragione Sociale (7 campi, LIKE)
+    if rs:
+        rs_fields = ("companyName", "company", "ragioneSociale", "businessName", "name", "ragione_sociale", "surname")
+        for field in rs_fields:
+            t0 = time.monotonic()
+            leads = await _do_search(field, rs, operator="like")
+            ms = int((time.monotonic() - t0) * 1000)
+            found_ids = [str(l.get("id", "")) for l in leads]
+            search_log.append({
+                "search": f"rs:{field}~{rs}",
+                "found": len(leads),
+                "ms": ms,
+                "lead_ids": found_ids,
+            })
+            for l in leads:
+                lid = str(l.get("id", ""))
+                if lid and lid not in all_leads_map:
+                    all_leads_map[lid] = {**l, "_found_via": f"rs:{field}"}
+
+    results["search_log"] = search_log
+
+    # ── Per OGNI lead: mostra info + conta registrazioni ──
+    total_recs = 0
+    leads_with_recs = 0
+    for lid, lead_data in all_leads_map.items():
+        t0 = time.monotonic()
+        recs_count, recs_list = await _do_search_recs(lid)
+        ms = int((time.monotonic() - t0) * 1000)
+
+        # Estrai info rilevanti dal lead
+        lead_info = {
+            "id": lid,
+            "found_via": lead_data.get("_found_via", "?"),
+            "campaign": lead_data.get("campaign") or lead_data.get("campaignName") or lead_data.get("campagna") or "?",
+            "phone1": lead_data.get("phone1", ""),
+            "phone2": lead_data.get("phone2", ""),
+            "phone3": lead_data.get("phone3", ""),
+            "phone4": lead_data.get("phone4", ""),
+            "companyName": lead_data.get("companyName") or lead_data.get("ragioneSociale") or "",
+            "vat": lead_data.get("vat") or lead_data.get("piva") or "",
+            "recs_count": recs_count,
+            "recs_ms": ms,
+        }
+
+        # Top 3 registrazioni (preview)
+        if recs_list:
+            top_recs = sorted(recs_list, key=lambda r: int(r.get("callLength") or 0), reverse=True)[:3]
+            lead_info["top_recs"] = [
+                {
+                    "id": r.get("id"),
+                    "callLength": r.get("callLength"),
+                    "converted": r.get("converted"),
+                    "createdWhen": r.get("createdWhen"),
+                }
+                for r in top_recs
+            ]
+            leads_with_recs += 1
+            total_recs += recs_count
+
+        results["leads"].append(lead_info)
+
+    results["summary"] = {
+        "total_leads": len(all_leads_map),
+        "leads_with_recs": leads_with_recs,
+        "total_recs": total_recs,
+        "search_methods_tried": len(search_log),
+        "searches_with_results": sum(1 for s in search_log if s["found"] > 0),
+    }
+    results["ok"] = leads_with_recs > 0 or len(all_leads_map) > 0
     return JSONResponse(results)
 
 

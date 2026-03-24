@@ -6,10 +6,11 @@ Flusso:
   2. POST a=searchRecs   — lista registrazioni del lead (tabella leadsRecs)
   3. GET  a=getLeadRec   — scarica singola registrazione per id numerico
 
-STRATEGIA RICERCA (fail-fast + deadline):
+STRATEGIA RICERCA (deadline globale 180s):
   - Ogni singola HTTP call wrappata in asyncio.wait_for(timeout=12)
-  - Deadline globale di 90s: se superata, STOP immediato
-  - SHORT-CIRCUIT: appena troviamo lead, ci fermiamo.
+  - Deadline globale di 180s: se superata, STOP immediato
+  - NESSUN short-circuit: cerca TUTTE le varianti telefono + P.IVA + RS
+    (il lead con registrazioni può essere in campagna diversa)
 """
 
 import asyncio
@@ -150,26 +151,31 @@ def _dedup_leads(leads: list[dict]) -> list[dict]:
 
 async def _search_phone_exact(variants: list[str], deadline: float) -> list[dict]:
     """
-    Cerca varianti telefono SEQUENZIALMENTE per variante, parallelo solo sui 4 campi.
-    Stop al primo risultato trovato (short-circuit per variante).
-    Max 4 richieste simultanee (non 12-16).
+    Cerca TUTTE le varianti telefono — NESSUN short-circuit.
+    Il lead con le registrazioni potrebbe essere salvato con una variante diversa
+    (es. 023655651 vs 39023655651) in una campagna diversa.
+    Max 4 richieste parallele per variante (sequenziale tra varianti).
     """
+    all_leads: list[dict] = []
     for v in variants:
         if deadline and time.monotonic() > deadline:
             break
         # 4 campi phone in parallelo per QUESTA variante
         tasks = [_search_leads_single(f, v, deadline=deadline) for f in _PHONE_FIELDS]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        leads: list[dict] = []
+        found_this: int = 0
         for r in results:
             if isinstance(r, list):
-                leads.extend(r)
-        deduped = _dedup_leads(leads)
-        if deduped:
-            logger.info("Sidial: trovati %d lead con variante=%s", len(deduped), v)
-            return deduped
-        logger.info("Sidial: 0 lead con variante=%s", v)
-    return []
+                all_leads.extend(r)
+                found_this += len(r)
+        if found_this:
+            logger.info("Sidial: %d lead con variante=%s", found_this, v)
+        else:
+            logger.info("Sidial: 0 lead con variante=%s", v)
+    deduped = _dedup_leads(all_leads)
+    if deduped:
+        logger.info("Sidial: telefono totale: %d lead unici da %d varianti", len(deduped), len(variants))
+    return deduped
 
 
 async def _search_phone_like(last_digits: str, deadline: float) -> list[dict]:
