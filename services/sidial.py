@@ -81,13 +81,14 @@ def _phone_variants(raw: str) -> list[str]:
 
 # ── Singola ricerca API con timeout DURO ─────────────────────────────────────
 
-async def _safe_post(client: httpx.AsyncClient, **kwargs) -> Optional[httpx.Response]:
-    """POST con asyncio.wait_for per garantire timeout anche se httpx non risponde."""
+async def _safe_post(data: dict) -> Optional[httpx.Response]:
+    """POST con CLIENT NUOVO ogni volta (evita problemi connection pool in BackgroundTask)."""
     try:
-        return await asyncio.wait_for(
-            client.post(_BASE, **kwargs),
-            timeout=_CALL_TIMEOUT,
-        )
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            return await asyncio.wait_for(
+                client.post(_BASE, data=data),
+                timeout=_CALL_TIMEOUT,
+            )
     except asyncio.TimeoutError:
         logger.warning("Sidial: POST hard-timeout dopo %ds", _CALL_TIMEOUT)
         return None
@@ -100,25 +101,24 @@ async def _safe_post(client: httpx.AsyncClient, **kwargs) -> Optional[httpx.Resp
 
 
 async def _search_leads_single(
-    client: httpx.AsyncClient,
     field: str,
     value: str,
     operator: str = "=",
     deadline: float = 0,
 ) -> list[dict]:
-    """Una singola chiamata searchLeads con timeout duro."""
+    """Una singola chiamata searchLeads — client nuovo ogni volta."""
     if deadline and time.monotonic() > deadline:
         return []
 
     params_json = json.dumps([{
         "table": "leads", "field": field, "operator": operator, "value": value,
     }])
-    resp = await _safe_post(client, data={
+    resp = await _safe_post({
         "a": "searchLeads", "apiToken": _TOKEN, "params": params_json,
     })
     if resp is None:
         return []
-    if resp.status_code != 200:
+    if resp.status_code not in (200, 404):
         logger.warning("searchLeads HTTP %s field=%s val=%s", resp.status_code, field, value[:30])
         return []
     try:
@@ -148,7 +148,7 @@ def _dedup_leads(leads: list[dict]) -> list[dict]:
 
 # ── Ricerche composite ───────────────────────────────────────────────────────
 
-async def _search_phone_exact(client: httpx.AsyncClient, variants: list[str], deadline: float) -> list[dict]:
+async def _search_phone_exact(variants: list[str], deadline: float) -> list[dict]:
     """
     Cerca varianti telefono SEQUENZIALMENTE per variante, parallelo solo sui 4 campi.
     Stop al primo risultato trovato (short-circuit per variante).
@@ -158,7 +158,7 @@ async def _search_phone_exact(client: httpx.AsyncClient, variants: list[str], de
         if deadline and time.monotonic() > deadline:
             break
         # 4 campi phone in parallelo per QUESTA variante
-        tasks = [_search_leads_single(client, f, v, deadline=deadline) for f in _PHONE_FIELDS]
+        tasks = [_search_leads_single(f, v, deadline=deadline) for f in _PHONE_FIELDS]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         leads: list[dict] = []
         for r in results:
@@ -172,10 +172,10 @@ async def _search_phone_exact(client: httpx.AsyncClient, variants: list[str], de
     return []
 
 
-async def _search_phone_like(client: httpx.AsyncClient, last_digits: str, deadline: float) -> list[dict]:
+async def _search_phone_like(last_digits: str, deadline: float) -> list[dict]:
     """Cerca con LIKE gli ultimi digit su phone1-4 (4 richieste parallele)."""
     tasks = [
-        _search_leads_single(client, f, last_digits, operator="like", deadline=deadline)
+        _search_leads_single(f, last_digits, operator="like", deadline=deadline)
         for f in _PHONE_FIELDS
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -187,16 +187,16 @@ async def _search_phone_like(client: httpx.AsyncClient, last_digits: str, deadli
 
 
 
-async def _search_fallback(client: httpx.AsyncClient, piva: str, ragione_sociale: str, last_name: str, deadline: float) -> list[dict]:
+async def _search_fallback(piva: str, ragione_sociale: str, last_name: str, deadline: float) -> list[dict]:
     """Cerca P.IVA + Ragione Sociale in parallelo."""
     tasks = []
     if piva:
         for f in ("vat", "piva", "partitaiva"):
-            tasks.append(_search_leads_single(client, f, piva, deadline=deadline))
+            tasks.append(_search_leads_single(f, piva, deadline=deadline))
     rs = ragione_sociale or last_name
     if rs:
         for f in ("companyName", "company", "ragioneSociale"):
-            tasks.append(_search_leads_single(client, f, rs, operator="like", deadline=deadline))
+            tasks.append(_search_leads_single(f, rs, operator="like", deadline=deadline))
     if not tasks:
         return []
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -235,50 +235,50 @@ async def _collect_all_leads(
             elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
             raise SidialDeadlineError(f"Deadline {_GLOBAL_DEADLINE}s superata alla {phase} (elapsed: {elapsed}s)")
 
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+    # NO client condiviso — ogni _safe_post crea il suo (come la diagnostica che funziona)
 
-        # ── FASE 1: match esatto tutte le varianti in parallelo ───────
-        if variants:
-            _check_deadline("FASE 1")
-            await _progress(f"FASE 1: ricerca telefono esatto ({len(variants)} varianti × 4 campi)...")
-            logger.info("Sidial FASE 1: %d varianti × 4 campi = %d ricerche parallele",
-                        len(variants), len(variants) * 4)
+    # ── FASE 1: match esatto tutte le varianti ──────────────────
+    if variants:
+        _check_deadline("FASE 1")
+        await _progress(f"FASE 1: ricerca telefono ({len(variants)} varianti)...")
+        logger.info("Sidial FASE 1: %d varianti sequenziali × 4 campi paralleli", len(variants))
 
-            leads = await _search_phone_exact(client, variants, deadline)
+        leads = await _search_phone_exact(variants, deadline)
 
-            if leads:
-                logger.info("Sidial FASE 1 OK: %d lead", len(leads))
-                await _progress(f"FASE 1 OK: {len(leads)} lead trovati!")
-                return leads, 1, "telefono_esatto"
-
+        if leads:
             elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
-            await _progress(f"FASE 1: 0 lead in {elapsed}s")
-            logger.info("Sidial FASE 1: 0 lead (elapsed: %ds)", elapsed)
+            logger.info("Sidial FASE 1 OK: %d lead in %ds", len(leads), elapsed)
+            await _progress(f"{len(leads)} lead trovati in {elapsed}s!")
+            return leads, 1, "telefono_esatto"
 
-        # ── FASE 2: LIKE con ultimi 9 digit ──────────────────────────
-        norm = _normalize_phone(phone)
-        if len(norm) >= 9:
-            _check_deadline("FASE 2")
-            last9 = norm[-9:]
-            await _progress(f"FASE 2: ricerca LIKE ultimi 9 cifre ({last9})...")
-            leads = await _search_phone_like(client, last9, deadline)
-            if leads:
-                logger.info("Sidial FASE 2 OK: %d lead con LIKE %s", len(leads), last9)
-                await _progress(f"FASE 2 OK: {len(leads)} lead con LIKE!")
-                return leads, 1, f"telefono_like_{last9}"
+        elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
+        await _progress(f"FASE 1: 0 lead in {elapsed}s")
+        logger.info("Sidial FASE 1: 0 lead (elapsed: %ds)", elapsed)
 
-            elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
-            await _progress(f"FASE 2: 0 lead in {elapsed}s")
+    # ── FASE 2: LIKE con ultimi 9 digit ──────────────────────────
+    norm = _normalize_phone(phone)
+    if len(norm) >= 9:
+        _check_deadline("FASE 2")
+        last9 = norm[-9:]
+        await _progress(f"FASE 2: ricerca LIKE ({last9})...")
+        leads = await _search_phone_like(last9, deadline)
+        if leads:
+            logger.info("Sidial FASE 2 OK: %d lead con LIKE %s", len(leads), last9)
+            await _progress(f"FASE 2 OK: {len(leads)} lead!")
+            return leads, 1, f"telefono_like_{last9}"
 
-        # ── FASE 3: P.IVA + Ragione Sociale (parallelo) ──────────────
-        if piva or ragione_sociale or last_name:
-            _check_deadline("FASE 3")
-            await _progress("FASE 3: fallback P.IVA / Ragione Sociale...")
-            leads = await _search_fallback(client, piva, ragione_sociale, last_name, deadline)
-            if leads:
-                logger.info("Sidial FASE 3 OK: %d lead", len(leads))
-                await _progress(f"FASE 3 OK: {len(leads)} lead!")
-                return leads, 1, "fallback_piva_rs"
+        elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
+        await _progress(f"FASE 2: 0 lead in {elapsed}s")
+
+    # ── FASE 3: P.IVA + Ragione Sociale ──────────────────────────
+    if piva or ragione_sociale or last_name:
+        _check_deadline("FASE 3")
+        await _progress("FASE 3: P.IVA / Ragione Sociale...")
+        leads = await _search_fallback(piva, ragione_sociale, last_name, deadline)
+        if leads:
+            logger.info("Sidial FASE 3 OK: %d lead", len(leads))
+            await _progress(f"FASE 3 OK: {len(leads)} lead!")
+            return leads, 1, "fallback_piva_rs"
 
     logger.warning("Sidial: 0 lead con qualsiasi strategia (phone=%s piva=%s rs=%s)",
                    phone, piva or "—", ragione_sociale or "—")
@@ -288,14 +288,14 @@ async def _collect_all_leads(
 
 # ── Ricerca registrazioni per leadId ─────────────────────────────────────────
 
-async def _search_recs_by_lead(client: httpx.AsyncClient, lead_id: str, deadline: float = 0) -> list[dict]:
-    """POST a=searchRecs con timeout duro."""
+async def _search_recs_by_lead(lead_id: str, deadline: float = 0) -> list[dict]:
+    """POST a=searchRecs — client nuovo ogni volta."""
     if deadline and time.monotonic() > deadline:
         logger.warning("searchRecs: deadline superata, skip leadId=%s", lead_id)
         return []
 
     filters = [{"table": "leadsRecs", "field": "lead", "operator": "=", "value": int(lead_id)}]
-    resp = await _safe_post(client, data={
+    resp = await _safe_post({
         "a": "searchRecs", "apiToken": _TOKEN, "params": json.dumps(filters),
     })
     if resp is None:
@@ -397,14 +397,15 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str, dead
 
 
 async def _download_one_attempt(
-    client: httpx.AsyncClient, url: str, rec_id: str, label: str, deadline: float,
+    url: str, rec_id: str, label: str, deadline: float,
 ) -> tuple[Optional[bytes], str]:
-    """Un singolo tentativo di download. Restituisce (bytes|None, motivo_fallimento)."""
+    """Un singolo tentativo di download — client nuovo ogni volta."""
     t = _time_left(deadline, 45.0)
     if t <= 0:
         return None, "deadline scaduta"
     try:
-        resp = await asyncio.wait_for(client.get(url), timeout=t)
+        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+            resp = await asyncio.wait_for(client.get(url), timeout=t)
         ct = resp.headers.get("content-type", "")
         body = resp.content
 
@@ -453,23 +454,24 @@ async def _download_one_attempt(
         return None, f"{type(exc).__name__}: {exc}"
 
 
-async def _download_rec(client: httpx.AsyncClient, rec_id: str, deadline: float = 0) -> tuple[Optional[bytes], str]:
+async def _download_rec(rec_id: str, deadline: float = 0) -> tuple[Optional[bytes], str]:
     """
-    Scarica audio con 3 strategie. Restituisce (bytes|None, motivo_fallimento).
+    Scarica audio con 3 strategie — client nuovo per ogni tentativo.
+    Restituisce (bytes|None, motivo_fallimento).
     """
     if _time_left(deadline) <= 0:
         return None, "deadline scaduta"
 
     # Strategia 1: GET standard
     url1 = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
-    audio, reason = await _download_one_attempt(client, url1, rec_id, "GET", deadline)
+    audio, reason = await _download_one_attempt(url1, rec_id, "GET", deadline)
     if audio:
         return audio, ""
 
     # Strategia 2: GET con raw=1
     if _time_left(deadline) > 5:
         url2 = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}&raw=1"
-        audio, reason2 = await _download_one_attempt(client, url2, rec_id, "GET+raw", deadline)
+        audio, reason2 = await _download_one_attempt(url2, rec_id, "GET+raw", deadline)
         if audio:
             return audio, ""
         reason = f"GET:{reason} · raw:{reason2}"
@@ -478,10 +480,11 @@ async def _download_rec(client: httpx.AsyncClient, rec_id: str, deadline: float 
     if _time_left(deadline) > 5:
         t3 = _time_left(deadline, 45.0)
         try:
-            resp = await asyncio.wait_for(
-                client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN}),
-                timeout=t3,
-            )
+            async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as post_client:
+                resp = await asyncio.wait_for(
+                    post_client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN}),
+                    timeout=t3,
+                )
             if resp.status_code == 200 and len(resp.content) > 1000:
                 ct = resp.headers.get("content-type", "")
                 if "text/html" not in ct and resp.content[:1] not in (b"<", b"{"):
@@ -564,24 +567,23 @@ async def find_and_download_all_recordings(
     seen_rec_ids: set = set()
     all_recs: list[dict] = []
 
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        for i, lead in enumerate(all_leads):
-            if time.monotonic() > deadline:
-                await _progress(f"Deadline! Interrotto dopo {i}/{len(all_leads)} lead")
-                break
-            lead_id = str(lead.get("id") or "")
-            if not lead_id:
-                continue
-            await _progress(f"searchRecs lead {i+1}/{len(all_leads)} (id={lead_id})...")
-            recs = await _search_recs_by_lead(client, lead_id, deadline=deadline)
-            for r in recs:
-                rid = str(r.get("id") or "")
-                if rid and rid not in seen_rec_ids:
-                    seen_rec_ids.add(rid)
-                    r["_lead_id"] = lead_id
-                    all_recs.append(r)
-            elapsed_bi = int(time.monotonic() - t0)
-            await _progress(f"Lead {i+1}/{len(all_leads)}: {len(all_recs)} rec trovate ({elapsed_bi}s)")
+    for i, lead in enumerate(all_leads):
+        if time.monotonic() > deadline:
+            await _progress(f"Deadline! Interrotto dopo {i}/{len(all_leads)} lead")
+            break
+        lead_id = str(lead.get("id") or "")
+        if not lead_id:
+            continue
+        await _progress(f"searchRecs lead {i+1}/{len(all_leads)} (id={lead_id})...")
+        recs = await _search_recs_by_lead(lead_id, deadline=deadline)
+        for r in recs:
+            rid = str(r.get("id") or "")
+            if rid and rid not in seen_rec_ids:
+                seen_rec_ids.add(rid)
+                r["_lead_id"] = lead_id
+                all_recs.append(r)
+        elapsed_bi = int(time.monotonic() - t0)
+        await _progress(f"Lead {i+1}/{len(all_leads)}: {len(all_recs)} rec trovate ({elapsed_bi}s)")
 
     elapsed_b = int(time.monotonic() - t0)
 
@@ -655,39 +657,36 @@ async def find_and_download_all_recordings(
         "search_method": search_method,
     }
 
-    # ── FASE E: scarica con CLIENT CONDIVISO (1 connessione TCP riusata) ─
+    # ── FASE E: scarica (client nuovo per ogni tentativo) ──────────────
     results: list[Tuple[str, bytes]] = []
     total_secs = 0
     failed = 0
     fail_reasons: list[str] = []
 
-    async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as dl_client:
-        for i, rec in enumerate(useful):
-            if time.monotonic() > deadline:
-                await _progress(f"Deadline! Scaricate {len(results)}/{len(useful)}")
-                break
+    for i, rec in enumerate(useful):
+        if time.monotonic() > deadline:
+            await _progress(f"Deadline! Scaricate {len(results)}/{len(useful)}")
+            break
 
-            rec_id = str(rec.get("id") or "")
-            if not rec_id:
-                continue
-            call_len = int(rec.get("callLength") or 0)
+        rec_id = str(rec.get("id") or "")
+        if not rec_id:
+            continue
+        call_len = int(rec.get("callLength") or 0)
 
-            await _progress(f"Download {i+1}/{len(useful)} (rec_id={rec_id}, {call_len}s)...")
-            audio_bytes, fail_reason = await _download_rec(dl_client, rec_id, deadline=deadline)
-            if audio_bytes:
-                results.append((rec_id, audio_bytes))
-                total_secs += call_len
-                await _progress(f"✓ {len(results)}/{len(useful)} scaricate ({call_len}s)")
-            else:
-                failed += 1
-                fail_reasons.append(f"rec={rec_id}: {fail_reason}")
-                await _progress(f"✗ Download {i+1} fallito: {fail_reason}")
-                logger.warning("Sidial: no audio rec_id=%s: %s (failed=%d)", rec_id, fail_reason, failed)
+        await _progress(f"Download {i+1}/{len(useful)} (rec_id={rec_id}, {call_len}s)...")
+        audio_bytes, fail_reason = await _download_rec(rec_id, deadline=deadline)
+        if audio_bytes:
+            results.append((rec_id, audio_bytes))
+            total_secs += call_len
+            await _progress(f"✓ {len(results)}/{len(useful)} scaricate ({call_len}s)")
+        else:
+            failed += 1
+            fail_reasons.append(f"rec={rec_id}: {fail_reason}")
+            await _progress(f"✗ Download {i+1} fallito: {fail_reason}")
+            logger.warning("Sidial: no audio rec_id=%s: %s (failed=%d)", rec_id, fail_reason, failed)
 
     stats["total_seconds"] = total_secs
     stats["download_failures"] = fail_reasons[:5]
-
-    stats["total_seconds"] = total_secs
     elapsed_tot = int(time.monotonic() - t0)
     stats["elapsed_seconds"] = elapsed_tot
     logger.info("Sidial: %d/%d scaricate · %ds audio · %ds elapsed", len(results), len(useful), total_secs, elapsed_tot)
