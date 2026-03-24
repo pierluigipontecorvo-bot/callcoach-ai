@@ -207,7 +207,7 @@ async def _search_fallback(piva: str, ragione_sociale: str, last_name: str, dead
     return _dedup_leads(all_leads)
 
 
-# ── Raccolta lead con SHORT-CIRCUIT + DEADLINE ───────────────────────────────
+# ── Raccolta lead — TUTTI i parametri, NESSUN short-circuit ──────────────────
 
 async def _collect_all_leads(
     phone: str,
@@ -218,10 +218,13 @@ async def _collect_all_leads(
     deadline: float = 0,
 ) -> tuple[list[dict], int, str]:
     """
-    SHORT-CIRCUIT + DEADLINE: veloce e sicuro.
+    Cerca lead con TUTTI i parametri disponibili e raccoglie TUTTI i risultati.
+    NON fa short-circuit — il lead con le registrazioni potrebbe essere
+    trovato da P.IVA e non da telefono (es. campagne diverse stesso numero).
     """
     variants = _phone_variants(phone)
-    logger.info("Sidial: varianti telefono: %s", variants)
+    logger.info("Sidial: varianti telefono: %s, piva=%s, rs=%s",
+                variants, piva or "—", ragione_sociale or "—")
 
     async def _progress(msg):
         if progress_cb:
@@ -235,54 +238,40 @@ async def _collect_all_leads(
             elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
             raise SidialDeadlineError(f"Deadline {_GLOBAL_DEADLINE}s superata alla {phase} (elapsed: {elapsed}s)")
 
-    # NO client condiviso — ogni _safe_post crea il suo (come la diagnostica che funziona)
+    all_leads: list[dict] = []
+    methods: list[str] = []
 
-    # ── FASE 1: match esatto tutte le varianti ──────────────────
+    # ── Telefono esatto (sequenziale per variante, 4 campi paralleli) ─
     if variants:
-        _check_deadline("FASE 1")
-        await _progress(f"FASE 1: ricerca telefono ({len(variants)} varianti)...")
-        logger.info("Sidial FASE 1: %d varianti sequenziali × 4 campi paralleli", len(variants))
+        _check_deadline("telefono")
+        await _progress(f"Ricerca telefono ({len(variants)} varianti)...")
+        phone_leads = await _search_phone_exact(variants, deadline)
+        if phone_leads:
+            all_leads.extend(phone_leads)
+            methods.append(f"tel:{len(phone_leads)}")
+            await _progress(f"Telefono: {len(phone_leads)} lead")
 
-        leads = await _search_phone_exact(variants, deadline)
-
-        if leads:
-            elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
-            logger.info("Sidial FASE 1 OK: %d lead in %ds", len(leads), elapsed)
-            await _progress(f"{len(leads)} lead trovati in {elapsed}s!")
-            return leads, 1, "telefono_esatto"
-
-        elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
-        await _progress(f"FASE 1: 0 lead in {elapsed}s")
-        logger.info("Sidial FASE 1: 0 lead (elapsed: %ds)", elapsed)
-
-    # ── FASE 2: LIKE con ultimi 9 digit ──────────────────────────
-    norm = _normalize_phone(phone)
-    if len(norm) >= 9:
-        _check_deadline("FASE 2")
-        last9 = norm[-9:]
-        await _progress(f"FASE 2: ricerca LIKE ({last9})...")
-        leads = await _search_phone_like(last9, deadline)
-        if leads:
-            logger.info("Sidial FASE 2 OK: %d lead con LIKE %s", len(leads), last9)
-            await _progress(f"FASE 2 OK: {len(leads)} lead!")
-            return leads, 1, f"telefono_like_{last9}"
-
-        elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
-        await _progress(f"FASE 2: 0 lead in {elapsed}s")
-
-    # ── FASE 3: P.IVA + Ragione Sociale ──────────────────────────
+    # ── P.IVA + Ragione Sociale (in parallelo) ───────────────────────
     if piva or ragione_sociale or last_name:
-        _check_deadline("FASE 3")
-        await _progress("FASE 3: P.IVA / Ragione Sociale...")
-        leads = await _search_fallback(piva, ragione_sociale, last_name, deadline)
-        if leads:
-            logger.info("Sidial FASE 3 OK: %d lead", len(leads))
-            await _progress(f"FASE 3 OK: {len(leads)} lead!")
-            return leads, 1, "fallback_piva_rs"
+        _check_deadline("piva/rs")
+        await _progress("Ricerca P.IVA / Ragione Sociale...")
+        fallback_leads = await _search_fallback(piva, ragione_sociale, last_name, deadline)
+        if fallback_leads:
+            all_leads.extend(fallback_leads)
+            methods.append(f"piva_rs:{len(fallback_leads)}")
+            await _progress(f"P.IVA/RS: +{len(fallback_leads)} lead")
 
-    logger.warning("Sidial: 0 lead con qualsiasi strategia (phone=%s piva=%s rs=%s)",
-                   phone, piva or "—", ragione_sociale or "—")
-    await _progress("Nessun lead trovato con nessuna strategia")
+    # ── Deduplica ────────────────────────────────────────────────────
+    unique = _dedup_leads(all_leads)
+    method_str = "+".join(methods) if methods else "nessuno"
+
+    if unique:
+        logger.info("Sidial: %d lead unici trovati (metodi: %s)", len(unique), method_str)
+        await _progress(f"{len(unique)} lead unici trovati ({method_str})")
+        return unique, len(methods), method_str
+
+    logger.warning("Sidial: 0 lead (phone=%s piva=%s rs=%s)", phone, piva or "—", ragione_sociale or "—")
+    await _progress("Nessun lead trovato")
     return [], 0, "nessuno"
 
 
