@@ -261,11 +261,16 @@ function updateRowAvanz(item) {
   var msg = item.step_message || 'In corso...';
   if (item.status === 'completed') {
     var ql = item.qualification_level || '';
+    var extra = '';
+    if (ql === 'errore_tecnico' && msg && msg !== 'Completata (errore tecnico)') {
+      extra = '<div style="font-size:9px;color:#94a3b8;margin-top:2px;">' + msg + '</div>';
+    }
     cell.innerHTML =
       '<div style="font-size:11px;font-weight:600;color:#333;margin-bottom:2px;">100%</div>' +
-      '<span class="badge ' + _qualClass(ql) + '" style="font-size:10px;">' + _qualLabel(ql) + '</span>';
+      '<span class="badge ' + _qualClass(ql) + '" style="font-size:10px;">' + _qualLabel(ql) + '</span>' + extra;
   } else if (item.status === 'error') {
-    cell.innerHTML = '<span class="badge bg-dark" style="font-size:10px;">❌ Errore tecnico</span>';
+    var errMsg = msg ? '<div style="font-size:9px;color:#94a3b8;margin-top:2px;">' + msg + '</div>' : '';
+    cell.innerHTML = '<span class="badge bg-dark" style="font-size:10px;">❌ Errore tecnico</span>' + errMsg;
   } else {
     cell.innerHTML =
       '<div style="font-size:11px;color:#708090;margin-bottom:2px;">' + pct + '%</div>' +

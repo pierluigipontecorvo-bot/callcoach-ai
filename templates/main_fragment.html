@@ -132,6 +132,9 @@
               <span class="badge bg-secondary" style="font-size:10px;">Non in target</span>
             {% elif ql == 'errore_tecnico' %}
               <span class="badge bg-dark" style="font-size:10px;">❌ Errore tecnico</span>
+              {% if ana.step_message and ana.step_message != 'Completata (errore tecnico)' %}
+                <div style="font-size:9px; color:#94a3b8; margin-top:2px;">{{ ana.step_message }}</div>
+              {% endif %}
             {% else %}
               <span class="badge bg-secondary" style="font-size:10px;">{{ ql or "—" }}</span>
             {% endif %}
@@ -160,6 +163,9 @@
             {% endif %}
           {% elif ana.status == 'error' %}
             <span class="badge bg-dark" style="font-size:10px;">❌ Errore tecnico</span>
+            {% if ana.step_message %}
+              <div style="font-size:9px; color:#94a3b8; margin-top:3px;">{{ ana.step_message }}</div>
+            {% endif %}
           {% else %}
             <span style="font-size:11px; color:#aaa;">{{ ana.status }}</span>
           {% endif %}

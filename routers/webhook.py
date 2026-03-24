@@ -527,30 +527,42 @@ async def _run_pipeline_inner(
     logger.info("[%s] Trascrizione totale: %d caratteri", appointment_id, len(transcript))
 
     _all_unavailable = all("[trascrizione non disponibile]" in p for p in transcript_parts)
-    _too_short = len(transcript.replace("\n", "").strip()) < 80
+    _clean_len = len(transcript.replace("\n", "").strip())
+    _too_short = _clean_len < 80
 
     if _all_unavailable or _too_short:
-        msg = f"Trascrizione troppo breve ({len(transcript)} char) — errore tecnico"
-        await update_step(analysis_id, 11, "stop", msg)
+        if _all_unavailable:
+            reason = f"Trascrizione fallita per tutte le {n_recs} registrazioni (motore: {_engine})"
+        else:
+            reason = f"Trascrizione troppo breve: {_clean_len} caratteri da {n_recs} registrazioni"
+
+        logger.warning("[%s] %s — testo: %r", appointment_id, reason, transcript[:300])
+        await update_step(analysis_id, 11, "stop", reason)
+
         # Save transcript and mark as errore tecnico
-        async with AsyncSessionLocal() as _sess:
-            async with _sess.begin():
-                _obj = await _sess.get(Analysis, analysis_id)
-                if _obj:
-                    _obj.processing_status = "completed"
-                    _obj.progress = 100
-                    _obj.step_message = "Completata (errore tecnico)"
-                    _obj.qualification_level = "errore_tecnico"
-                    _obj.transcript = transcript
-                    _obj.report_json = {
-                        "errore_tecnico": True,
-                        "qualificazione": {
-                            "rating": 1, "label": "INSUFFICIENTE",
-                            "fuori_parametro": False,
-                            "spiegazione": "Analisi non valida — errore tecnico di trascrizione.",
-                            "parametri_verificati": [], "parametri_mancanti": [],
-                        },
-                    }
+        try:
+            async with AsyncSessionLocal() as _sess:
+                async with _sess.begin():
+                    _obj = await _sess.get(Analysis, analysis_id)
+                    if _obj:
+                        _obj.processing_status = "completed"
+                        _obj.progress = 100
+                        _obj.step_message = reason
+                        _obj.qualification_level = "errore_tecnico"
+                        _obj.error_message = reason
+                        _obj.transcript = transcript
+                        _obj.report_json = {
+                            "errore_tecnico": True,
+                            "motivo": reason,
+                            "qualificazione": {
+                                "rating": 1, "label": "INSUFFICIENTE",
+                                "fuori_parametro": False,
+                                "spiegazione": f"Analisi non valida — {reason}",
+                                "parametri_verificati": [], "parametri_mancanti": [],
+                            },
+                        }
+        except Exception as _e:
+            logger.error("[%s] Salvataggio errore_tecnico fallito: %s", appointment_id, _e)
         return
 
     await update_step(analysis_id, 11, "ok", f"{len(transcript)} caratteri trascritti · motore: {_engine}")
