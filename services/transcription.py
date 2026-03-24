@@ -101,7 +101,7 @@ async def transcribe_with_assemblyai(
                 "audio_url": upload_url,
                 "speaker_labels": True,
                 "language_code": "it",
-                "speech_model": "universal-2",
+                "speech_models": ["universal-2"],
             },
         )
         if transcript_resp.status_code != 200:
