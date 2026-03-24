@@ -370,7 +370,7 @@ async def _collect_all_leads(
     piva: str = "",
     ragione_sociale: str = "",
     last_name: str = "",
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     """
     Cerca lead su Sidial con tutti i parametri disponibili nell'ordine:
     1. phone (normalizzato)
@@ -378,10 +378,11 @@ async def _collect_all_leads(
     3. P.IVA
     4. Ragione Sociale
     5. lastName (fallback se form assente)
-    Restituisce lista di lead unici (deduplicati per ID).
+    Restituisce (lista lead unici, search_params_used).
     """
     seen_ids: set = set()
     all_leads: list[dict] = []
+    search_params_used = 0
 
     def _add_leads(new_leads: list[dict], source: str) -> int:
         added = 0
@@ -399,31 +400,36 @@ async def _collect_all_leads(
 
     # 1. Telefono normalizzato
     leads = await _search_leads_by_phone(norm_phone)
-    _add_leads(leads, f"phone={norm_phone}")
+    if _add_leads(leads, f"phone={norm_phone}"):
+        search_params_used += 1
 
     # 2. Telefono originale (se diverso)
     if norm_phone != phone and not leads:
         leads2 = await _search_leads_by_phone(phone)
-        _add_leads(leads2, f"phone_orig={phone}")
+        if _add_leads(leads2, f"phone_orig={phone}"):
+            search_params_used += 1
 
     # Form presente: cerca per P.IVA e Ragione Sociale
     form_present = bool(piva or ragione_sociale)
 
     if piva:
         leads_piva = await _search_leads_by_piva(piva)
-        _add_leads(leads_piva, f"piva={piva}")
+        if _add_leads(leads_piva, f"piva={piva}"):
+            search_params_used += 1
 
     if ragione_sociale:
         leads_rs = await _search_leads_by_ragione_sociale(ragione_sociale)
-        _add_leads(leads_rs, f"ragione_sociale={ragione_sociale}")
+        if _add_leads(leads_rs, f"ragione_sociale={ragione_sociale}"):
+            search_params_used += 1
 
     # Form assente: cerca per lastName come ricerca indipendente (non fallback)
     if not form_present and last_name:
         leads_ln = await _search_leads_by_ragione_sociale(last_name)
-        _add_leads(leads_ln, f"lastName={last_name}")
+        if _add_leads(leads_ln, f"lastName={last_name}"):
+            search_params_used += 1
 
-    logger.info("Sidial: totale %d lead unici trovati", len(all_leads))
-    return all_leads
+    logger.info("Sidial: totale %d lead unici trovati (search_params_used=%d)", len(all_leads), search_params_used)
+    return all_leads, search_params_used
 
 
 async def find_and_download_all_recordings(
@@ -463,7 +469,7 @@ async def find_and_download_all_recordings(
     )
 
     # ── FASE A: raccogli tutti i lead unici da tutti i parametri ─────────────
-    all_leads = await _collect_all_leads(
+    all_leads, search_params_used = await _collect_all_leads(
         phone=phone, piva=piva,
         ragione_sociale=ragione_sociale, last_name=last_name,
     )
@@ -543,12 +549,6 @@ async def find_and_download_all_recordings(
         "Sidial: RIEPILOGO — %d lead | %d rec totali | %d recenti | %d da scaricare | %d in conversione",
         len(all_leads), len(all_recs_sorted), len(recent), len(useful), len(pending_long),
     )
-
-    # Count how many search params found leads
-    _phone_leads = len(await _search_leads_by_phone(_normalize_phone(phone))) if phone else 0
-    _piva_leads = len(await _search_leads_by_piva(piva)) if piva else 0
-    _rs_leads = len(await _search_leads_by_ragione_sociale(ragione_sociale)) if ragione_sociale else 0
-    search_params_used = sum([bool(_phone_leads), bool(_piva_leads), bool(_rs_leads)])
 
     # Build stats dict
     stats: dict = {
