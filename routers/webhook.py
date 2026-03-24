@@ -428,7 +428,7 @@ async def _run_pipeline_inner(
                 return_stats=True,
                 progress_cb=_step9_progress,
             ),
-            timeout=120,  # backup: 120s hard wall-clock dal webhook
+            timeout=200,  # backup: deve essere > _GLOBAL_DEADLINE (180s) di sidial.py
         )
     except asyncio.TimeoutError:
         elapsed = int(_time_mod.monotonic() - _sidial_start)

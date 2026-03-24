@@ -188,14 +188,14 @@ async def _search_phone_like(last_digits: str, deadline: float) -> list[dict]:
 
 
 async def _search_fallback(piva: str, ragione_sociale: str, last_name: str, deadline: float) -> list[dict]:
-    """Cerca P.IVA + Ragione Sociale in parallelo."""
+    """Cerca P.IVA + Ragione Sociale in parallelo — TUTTI i campi possibili."""
     tasks = []
     if piva:
-        for f in ("vat", "piva", "partitaiva"):
+        for f in ("vat", "piva", "partitaiva", "fiscal_code", "codfis", "taxid", "cf"):
             tasks.append(_search_leads_single(f, piva, deadline=deadline))
     rs = ragione_sociale or last_name
     if rs:
-        for f in ("companyName", "company", "ragioneSociale"):
+        for f in ("companyName", "company", "ragioneSociale", "businessName", "name", "ragione_sociale", "surname"):
             tasks.append(_search_leads_single(f, rs, operator="like", deadline=deadline))
     if not tasks:
         return []
