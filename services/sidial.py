@@ -526,13 +526,17 @@ async def find_and_download_all_recordings(
         _no_recs_stats = {**_empty_stats, "leads_found": len(all_leads), "search_method": search_method, "elapsed_seconds": elapsed_b}
         return ([], _no_recs_stats) if return_stats else []
 
-    # ── FASE C: filtra per lookback_days ──────────────────────────────────
-    def _sort_key(r: dict) -> datetime:
-        dt = _parse_rec_datetime(r)
-        return dt if dt else datetime.min.replace(tzinfo=timezone.utc)
+    # ── FASE C: filtra per lookback_days + ordina per durata DESC ────────
+    _MIN_SEC = max(10, min_call_seconds)
 
-    all_recs_sorted = sorted(all_recs, key=_sort_key)
-    logger.info("Sidial: %d registrazioni uniche totali", len(all_recs_sorted))
+    all_recs_sorted = sorted(
+        all_recs,
+        key=lambda r: int(r.get("callLength") or 0),
+        reverse=True,  # le più lunghe PRIMA — la chiamata di vendita è la più lunga
+    )
+    logger.info("Sidial: %d registrazioni totali, top callLength=%ss",
+                len(all_recs_sorted),
+                all_recs_sorted[0].get("callLength") if all_recs_sorted else "?")
 
     recent = [
         r for r in all_recs_sorted
@@ -540,28 +544,41 @@ async def find_and_download_all_recordings(
     ]
 
     if recent:
-        recs_to_download = recent[:max_recs]
+        candidates = recent
     else:
-        recs_to_download = all_recs_sorted[-1:]
-        logger.warning("Sidial: nessuna rec recente — uso ultima")
+        candidates = all_recs_sorted[:3]
+        logger.warning("Sidial: nessuna rec recente — uso le 3 più lunghe")
 
-    # ── FASE D: filtra per durata ─────────────────────────────────────────
-    _MIN_SEC = max(10, min_call_seconds)
-    useful = [r for r in recs_to_download if int(r.get("callLength") or 0) >= _MIN_SEC]
-    if not useful:
-        useful = recs_to_download
-
-    pending_long = [
-        r for r in useful
-        if (r.get("converted") or "n").lower() != "y"
-        and int(r.get("callLength") or 0) >= _MIN_SEC
+    # Filtra per durata minima e converted=y
+    useful = [
+        r for r in candidates
+        if int(r.get("callLength") or 0) >= _MIN_SEC
+        and (r.get("converted") or "n").lower() == "y"
     ]
 
-    await _progress(f"{len(useful)} registrazioni da scaricare...")
+    # Se nessuna converted, tieni le non-converted come "pending"
+    pending_long = [
+        r for r in candidates
+        if int(r.get("callLength") or 0) >= _MIN_SEC
+        and (r.get("converted") or "n").lower() != "y"
+    ]
+
+    if not useful and not pending_long:
+        # Nessuna con durata sufficiente — usa la più lunga disponibile
+        useful = [r for r in candidates if (r.get("converted") or "n").lower() == "y"][:1]
+
+    # LIMITE: scarica max 5 registrazioni (le più lunghe, già ordinate)
+    _MAX_DOWNLOAD = 5
+    useful = useful[:_MAX_DOWNLOAD]
+
+    await _progress(f"{len(useful)} registrazioni da scaricare (max {_MAX_DOWNLOAD}, ordinate per durata)...")
     logger.info(
-        "Sidial: %d lead | %d rec | %d recenti | %d da scaricare | %d in conv. | metodo=%s | elapsed=%ds",
+        "Sidial: %d lead | %d rec tot | %d recenti | %d utili | %d pending | metodo=%s | elapsed=%ds",
         len(all_leads), len(all_recs_sorted), len(recent), len(useful), len(pending_long), search_method, elapsed_b,
     )
+    for j, r in enumerate(useful[:5]):
+        logger.info("  → [%d] rec_id=%s callLength=%ss converted=%s",
+                     j+1, r.get("id"), r.get("callLength"), r.get("converted"))
 
     stats: dict = {
         "leads_found": len(all_leads),
@@ -573,29 +590,34 @@ async def find_and_download_all_recordings(
         "search_method": search_method,
     }
 
-    # ── FASE E: scarica ──────────────────────────────────────────────────
+    # ── FASE E: scarica (max 5, stop appena ne abbiamo 3 OK) ────────────
+    _MIN_GOOD = 3  # basta 3 registrazioni riuscite
     results: list[Tuple[str, bytes]] = []
     total_secs = 0
+    failed = 0
     for i, rec in enumerate(useful):
         if time.monotonic() > deadline:
-            logger.warning("Sidial: deadline in FASE E dopo %d/%d download", i, len(useful))
-            await _progress(f"Deadline — scaricate {len(results)}/{len(useful)} registrazioni")
+            await _progress(f"Deadline! Scaricate {len(results)}/{len(useful)}")
             break
+        if len(results) >= _MIN_GOOD:
+            logger.info("Sidial: già %d registrazioni OK, stop download", len(results))
+            await _progress(f"{len(results)} registrazioni scaricate — sufficienti!")
+            break
+
         rec_id = str(rec.get("id") or "")
         if not rec_id:
             continue
         call_len = int(rec.get("callLength") or 0)
-        if (rec.get("converted") or "n").lower() != "y":
-            logger.info("Sidial: rec_id=%s in conversione, skip", rec_id)
-            continue
 
-        await _progress(f"Download registrazione {i+1}/{len(useful)}...")
+        await _progress(f"Download {i+1}/{len(useful)} (rec_id={rec_id}, {call_len}s)...")
         audio_bytes = await _download_rec(rec_id, file_name=rec.get("fileName") or "", deadline=deadline)
         if audio_bytes:
             results.append((rec_id, audio_bytes))
             total_secs += call_len
+            await _progress(f"✓ Scaricata {len(results)}/{len(useful)} ({call_len}s)")
         else:
-            logger.warning("Sidial: no audio per rec_id=%s", rec_id)
+            failed += 1
+            logger.warning("Sidial: no audio per rec_id=%s (failed=%d)", rec_id, failed)
 
     stats["total_seconds"] = total_secs
     elapsed_tot = int(time.monotonic() - t0)
