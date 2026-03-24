@@ -37,7 +37,7 @@ _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 _CALL_TIMEOUT = 12  # secondi
 
 # Deadline globale per tutta la ricerca Sidial
-_GLOBAL_DEADLINE = 90  # secondi
+_GLOBAL_DEADLINE = 120  # secondi
 
 _PHONE_FIELDS = ("phone1", "phone2", "phone3", "phone4")
 
@@ -566,8 +566,8 @@ async def find_and_download_all_recordings(
         # Nessuna con durata sufficiente — usa la più lunga disponibile
         useful = [r for r in candidates if (r.get("converted") or "n").lower() == "y"][:1]
 
-    # LIMITE: scarica max 2 registrazioni (le più lunghe = le chiamate vere)
-    _MAX_DOWNLOAD = 2
+    # LIMITE: scarica max 10 registrazioni (ordinate per durata)
+    _MAX_DOWNLOAD = 10
     useful = useful[:_MAX_DOWNLOAD]
 
     await _progress(f"{len(useful)} registrazioni da scaricare (max {_MAX_DOWNLOAD}, ordinate per durata)...")
@@ -590,7 +590,7 @@ async def find_and_download_all_recordings(
     }
 
     # ── FASE E: scarica (max 5, stop appena ne abbiamo 3 OK) ────────────
-    _MIN_GOOD = 1  # basta 1 registrazione per l'analisi
+    _MIN_GOOD = 99  # scarica tutto quello che riesce entro la deadline
     results: list[Tuple[str, bytes]] = []
     total_secs = 0
     failed = 0
