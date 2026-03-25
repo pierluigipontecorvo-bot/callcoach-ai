@@ -30,12 +30,10 @@ logger = logging.getLogger(__name__)
 _BASE  = settings.sidial_api_url.rstrip("/")
 _TOKEN = settings.sidial_api_token
 
-# Timeout per singola HTTP call — httpx-level (backup)
-_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0)
-_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
-
-# Timeout DURO per singola HTTP call — asyncio.wait_for (primario, 100% affidabile)
-_CALL_TIMEOUT = 12  # secondi
+# Timeout httpx nativi — più affidabili di asyncio.wait_for dentro async with
+# asyncio.wait_for + async with httpx può bloccarsi durante aclose() alla cancellazione
+_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
+_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0)
 
 # Deadline globale per tutta la ricerca + download Sidial
 _GLOBAL_DEADLINE = 180  # secondi (3 minuti — file grandi su server lento)
@@ -83,18 +81,17 @@ def _phone_variants(raw: str) -> list[str]:
 # ── Singola ricerca API con timeout DURO ─────────────────────────────────────
 
 async def _safe_post(data: dict) -> Optional[httpx.Response]:
-    """POST con CLIENT NUOVO ogni volta (evita problemi connection pool in BackgroundTask)."""
+    """
+    POST con CLIENT NUOVO ogni volta + timeout httpx nativi.
+    NON usa asyncio.wait_for: dentro async with httpx, la cancellazione
+    di wait_for può bloccarsi durante aclose() se la connessione è stuck.
+    I timeout httpx nativi (connect/read) sono gestiti internamente e non bloccano.
+    """
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            return await asyncio.wait_for(
-                client.post(_BASE, data=data),
-                timeout=_CALL_TIMEOUT,
-            )
-    except asyncio.TimeoutError:
-        logger.warning("Sidial: POST hard-timeout dopo %ds", _CALL_TIMEOUT)
-        return None
+            return await client.post(_BASE, data=data)
     except httpx.TimeoutException as exc:
-        logger.warning("Sidial: httpx timeout: %s", exc)
+        logger.warning("Sidial: POST timeout: %s", type(exc).__name__)
         return None
     except Exception as exc:
         logger.warning("Sidial: POST errore: %s", exc)
@@ -370,7 +367,7 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str, dead
                         t2 = _time_left(deadline, 15.0)
                         if t2 <= 0:
                             return None
-                        audio_resp = await asyncio.wait_for(client.get(rec_url), timeout=t2)
+                        audio_resp = await client.get(rec_url)
                         if audio_resp.status_code == 200 and len(audio_resp.content) > 1000:
                             return audio_resp.content
             except Exception:
@@ -394,13 +391,15 @@ async def _try_fetch_audio(client: httpx.AsyncClient, url: str, label: str, dead
 async def _download_one_attempt(
     url: str, rec_id: str, label: str, deadline: float,
 ) -> tuple[Optional[bytes], str]:
-    """Un singolo tentativo di download — client nuovo ogni volta."""
+    """Un singolo tentativo di download — client nuovo, timeout httpx nativi."""
     t = _time_left(deadline, 45.0)
     if t <= 0:
         return None, "deadline scaduta"
+    # Usa timeout httpx nativi (read=min(t,30s)) — NON asyncio.wait_for
+    dl_timeout = httpx.Timeout(connect=5.0, read=min(t, 30.0), write=5.0, pool=2.0)
     try:
-        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
-            resp = await asyncio.wait_for(client.get(url), timeout=t)
+        async with httpx.AsyncClient(timeout=dl_timeout, follow_redirects=True) as client:
+            resp = await client.get(url)
         ct = resp.headers.get("content-type", "")
         body = resp.content
 
@@ -424,7 +423,7 @@ async def _download_one_attempt(
                         t2 = _time_left(deadline, 45.0)
                         if t2 <= 0:
                             return None, "deadline scaduta (redirect)"
-                        audio_resp = await asyncio.wait_for(client.get(rec_url), timeout=t2)
+                        audio_resp = await client.get(rec_url)
                         if audio_resp.status_code == 200 and len(audio_resp.content) > 1000:
                             logger.info("download %s rec_id=%s: redirect OK %d bytes", label, rec_id, len(audio_resp.content))
                             return audio_resp.content, ""
@@ -473,12 +472,12 @@ async def _download_rec(rec_id: str, deadline: float = 0) -> tuple[Optional[byte
 
     # Strategia 3: POST
     if _time_left(deadline) > 5:
-        t3 = _time_left(deadline, 45.0)
+        t3 = _time_left(deadline, 30.0)
+        dl3 = httpx.Timeout(connect=5.0, read=min(t3, 30.0), write=5.0, pool=2.0)
         try:
-            async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as post_client:
-                resp = await asyncio.wait_for(
-                    post_client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN}),
-                    timeout=t3,
+            async with httpx.AsyncClient(timeout=dl3, follow_redirects=True) as post_client:
+                resp = await post_client.post(
+                    _BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN}
                 )
             if resp.status_code == 200 and len(resp.content) > 1000:
                 ct = resp.headers.get("content-type", "")

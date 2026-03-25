@@ -25,7 +25,7 @@ import time as _time_mod
 from urllib.parse import parse_qs
 
 # Versione pipeline — visibile nello step 1 per verificare deploy
-_PIPELINE_VERSION = "v2024-03-24g"
+_PIPELINE_VERSION = "v2024-03-24h"
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
