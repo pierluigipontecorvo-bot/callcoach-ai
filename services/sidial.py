@@ -148,65 +148,57 @@ def _dedup_leads(leads: list[dict]) -> list[dict]:
 
 async def _search_phone_exact(variants: list[str], deadline: float) -> list[dict]:
     """
-    Cerca TUTTE le varianti telefono — NESSUN short-circuit.
-    Il lead con le registrazioni potrebbe essere salvato con una variante diversa
-    (es. 023655651 vs 39023655651) in una campagna diversa.
-    Max 4 richieste parallele per variante (sequenziale tra varianti).
+    Cerca TUTTE le varianti × TUTTI i campi — COMPLETAMENTE SEQUENZIALE.
+    No asyncio.gather: elimina problemi di cancellazione in BackgroundTask.
+    Ogni request ha timeout httpx nativo (connect=5s, read=10s).
     """
     all_leads: list[dict] = []
     for v in variants:
-        if deadline and time.monotonic() > deadline:
-            break
-        # 4 campi phone in parallelo per QUESTA variante
-        tasks = [_search_leads_single(f, v, deadline=deadline) for f in _PHONE_FIELDS]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        found_this: int = 0
-        for r in results:
-            if isinstance(r, list):
-                all_leads.extend(r)
-                found_this += len(r)
-        if found_this:
-            logger.info("Sidial: %d lead con variante=%s", found_this, v)
-        else:
-            logger.info("Sidial: 0 lead con variante=%s", v)
+        for f in _PHONE_FIELDS:
+            if deadline and time.monotonic() > deadline:
+                logger.info("Sidial phone search: deadline superata, stop")
+                return _dedup_leads(all_leads)
+            leads = await _search_leads_single(f, v, deadline=deadline)
+            if leads:
+                logger.info("Sidial: %d lead con %s=%s", len(leads), f, v)
+                all_leads.extend(leads)
     deduped = _dedup_leads(all_leads)
     if deduped:
-        logger.info("Sidial: telefono totale: %d lead unici da %d varianti", len(deduped), len(variants))
+        logger.info("Sidial: telefono totale: %d lead unici", len(deduped))
     return deduped
 
 
 async def _search_phone_like(last_digits: str, deadline: float) -> list[dict]:
-    """Cerca con LIKE gli ultimi digit su phone1-4 (4 richieste parallele)."""
-    tasks = [
-        _search_leads_single(f, last_digits, operator="like", deadline=deadline)
-        for f in _PHONE_FIELDS
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    """Cerca con LIKE gli ultimi digit su phone1-4 — SEQUENZIALE."""
     all_leads: list[dict] = []
-    for r in results:
-        if isinstance(r, list):
-            all_leads.extend(r)
+    for f in _PHONE_FIELDS:
+        if deadline and time.monotonic() > deadline:
+            break
+        leads = await _search_leads_single(f, last_digits, operator="like", deadline=deadline)
+        all_leads.extend(leads)
     return _dedup_leads(all_leads)
 
 
-
 async def _search_fallback(piva: str, ragione_sociale: str, last_name: str, deadline: float) -> list[dict]:
-    """Cerca P.IVA + Ragione Sociale in parallelo — TUTTI i campi possibili."""
-    tasks = []
+    """Cerca P.IVA + Ragione Sociale — COMPLETAMENTE SEQUENZIALE."""
+    all_leads: list[dict] = []
     if piva:
         for f in ("vat", "piva", "partitaiva", "fiscal_code", "codfis", "taxid", "cf"):
-            tasks.append(_search_leads_single(f, piva, deadline=deadline))
+            if deadline and time.monotonic() > deadline:
+                break
+            leads = await _search_leads_single(f, piva, deadline=deadline)
+            if leads:
+                logger.info("Sidial: %d lead con piva:%s", len(leads), f)
+                all_leads.extend(leads)
     rs = ragione_sociale or last_name
     if rs:
         for f in ("companyName", "company", "ragioneSociale", "businessName", "name", "ragione_sociale", "surname"):
-            tasks.append(_search_leads_single(f, rs, operator="like", deadline=deadline))
-    if not tasks:
-        return []
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    all_leads: list[dict] = []
-    for r in results:
-        if isinstance(r, list):
-            all_leads.extend(r)
+            if deadline and time.monotonic() > deadline:
+                break
+            leads = await _search_leads_single(f, rs, operator="like", deadline=deadline)
+            if leads:
+                logger.info("Sidial: %d lead con rs:%s", len(leads), f)
+                all_leads.extend(leads)
     return _dedup_leads(all_leads)
 
 

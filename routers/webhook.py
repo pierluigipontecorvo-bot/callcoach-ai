@@ -25,7 +25,7 @@ import time as _time_mod
 from urllib.parse import parse_qs
 
 # Versione pipeline — visibile nello step 1 per verificare deploy
-_PIPELINE_VERSION = "v2024-03-24h"
+_PIPELINE_VERSION = "v2024-03-24i"
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -405,40 +405,30 @@ async def _run_pipeline_inner(
         lookback, min_secs, retry_count, retry_wait = 90, 20, 5, 180
 
     async def _step9_progress(msg):
-        """Progress callback con timeout 3s — NON deve bloccare la pipeline."""
+        """Progress callback — non bloccante, ignora errori DB."""
         try:
-            await asyncio.wait_for(
-                update_step(analysis_id, 9, "running", f"Sidial: {msg}"),
-                timeout=3.0,
-            )
+            await update_step(analysis_id, 9, "running", f"Sidial: {msg}")
         except Exception:
             pass  # Se il DB è lento, ignoriamo — la pipeline continua
 
     _sidial_start = _time_mod.monotonic()
     try:
-        recordings, sidial_stats = await asyncio.wait_for(
-            find_and_download_all_recordings(
-                phone=phone,
-                campaign_code=campaign_info.get("raw"),
-                lookback_days=lookback,
-                piva=piva or "",
-                ragione_sociale=ragione_sociale or "",
-                last_name=last_name if not form_fields else "",
-                min_call_seconds=min_secs,
-                return_stats=True,
-                progress_cb=_step9_progress,
-            ),
-            timeout=200,  # backup: deve essere > _GLOBAL_DEADLINE (180s) di sidial.py
+        # NO asyncio.wait_for: sidial.py gestisce internamente il deadline (180s)
+        # con timeout httpx nativi. asyncio.wait_for causa hang su aclose() httpx.
+        recordings, sidial_stats = await find_and_download_all_recordings(
+            phone=phone,
+            campaign_code=campaign_info.get("raw"),
+            lookback_days=lookback,
+            piva=piva or "",
+            ragione_sociale=ragione_sociale or "",
+            last_name=last_name if not form_fields else "",
+            min_call_seconds=min_secs,
+            return_stats=True,
+            progress_cb=_step9_progress,
         )
-    except asyncio.TimeoutError:
-        elapsed = int(_time_mod.monotonic() - _sidial_start)
-        msg = f"Sidial TIMEOUT dopo {elapsed}s — la ricerca ha impiegato troppo tempo"
-        logger.error("[%s] %s", appointment_id, msg)
-        await update_step(analysis_id, 9, "stop", msg)
-        await _save_error(analysis_id, appointment_id, msg, acuity_account)
-        return
     except Exception as exc:
-        msg = f"Errore Sidial: {type(exc).__name__}: {exc}"
+        elapsed = int(_time_mod.monotonic() - _sidial_start)
+        msg = f"Errore Sidial dopo {elapsed}s: {type(exc).__name__}: {exc}"
         logger.error("[%s] %s", appointment_id, msg, exc_info=True)
         await update_step(analysis_id, 9, "stop", msg)
         await _save_error(analysis_id, appointment_id, msg, acuity_account)
