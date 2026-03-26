@@ -1248,7 +1248,7 @@ async def appointments_data(
         enriched = [e for e in enriched if _in_period(e)]
 
     has_processing = any(
-        a.get("analysis") and a["analysis"]["status"] == "processing"
+        a.get("analysis") and a["analysis"]["status"] in ("processing", "pending_conversion")
         for a in enriched
     )
 
@@ -1332,7 +1332,7 @@ async def appointments_status_poll(request: Request, db: AsyncSession = Depends(
         }
         for r in latest_by_appt.values()
     ]
-    has_processing = any(r.processing_status in ("processing", "pending") for r in latest_by_appt.values())
+    has_processing = any(r.processing_status in ("processing", "pending", "pending_conversion") for r in latest_by_appt.values())
     return JSONResponse({"items": items, "has_processing": has_processing})
 
 

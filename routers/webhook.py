@@ -25,7 +25,7 @@ import time as _time_mod
 from urllib.parse import parse_qs
 
 # Versione pipeline — visibile nello step 1 per verificare deploy
-_PIPELINE_VERSION = "v2024-03-24j"
+_PIPELINE_VERSION = "v2024-03-26a"
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -469,36 +469,27 @@ async def _run_pipeline_inner(
     )
 
     if not recordings:
-        # Try to wait for converting recordings — ONLY for today's appointments
         if sidial_stats["converting_recs"] > 0 and not _is_old_appointment:
-            for attempt in range(1, retry_count + 1):
-                await update_step(
-                    analysis_id, 10, "running",
-                    f"Registrazioni in conversione — attendo {retry_wait // 60} min "
-                    f"(tentativo {attempt}/{retry_count})",
-                )
-                await asyncio.sleep(retry_wait)
-
-                try:
-                    recordings, sidial_stats = await find_and_download_all_recordings(
-                        phone=phone,
-                        campaign_code=campaign_info.get("raw"),
-                        lookback_days=lookback,
-                        piva=piva or "",
-                        ragione_sociale=ragione_sociale or "",
-                        last_name=last_name if not form_fields else "",
-                        min_call_seconds=min_secs,
-                        return_stats=True,
-                    )
-                except Exception as exc:
-                    logger.warning("[%s] Retry %d/%d failed: %s", appointment_id, attempt, retry_count, exc)
-                    continue
-
-                if recordings:
-                    break
+            # Registrazioni in conversione wav→mp3: salva come pending_conversion
+            # Il retry automatico avviene ogni 10 minuti (fino a 6 volte = ~60 min)
+            _conv_msg = (
+                f"Registrazioni in conversione — retry automatico ogni 10 min "
+                f"(max 6 tentativi) · {stats_msg}"
+            )
+            await update_step(analysis_id, 10, "running", _conv_msg)
+            try:
+                async with AsyncSessionLocal() as _cs:
+                    async with _cs.begin():
+                        _ca = await _cs.get(Analysis, analysis_id)
+                        if _ca:
+                            _ca.processing_status = "pending_conversion"
+                            _ca.step_message = _conv_msg
+            except Exception as _ce:
+                logger.warning("[%s] Set pending_conversion failed: %s", appointment_id, _ce)
+            return
 
         if not recordings:
-            msg = f"0 registrazioni scaricabili dopo tutti i tentativi · {stats_msg}"
+            msg = f"0 registrazioni trovate · {stats_msg}"
             await update_step(analysis_id, 10, "stop", msg,
                               detail={"can_upload_audio": True, "can_upload_transcript": True})
             await _save_error(analysis_id, appointment_id, msg, acuity_account)
@@ -826,6 +817,266 @@ async def _run_pipeline_inner(
         await update_step(analysis_id, 14, "warning", f"Errore invio email: {exc}")
 
     logger.info("[%s] Pipeline completata — qualifica: %s", appointment_id, qualification_level)
+
+
+# ── Retry automatico registrazioni in conversione ─────────────────────────────
+
+async def retry_conversion_analysis(analysis_id: int) -> bool:
+    """
+    Riprova download+trascrizione+analisi per un'analisi in pending_conversion.
+    Chiamata ogni 10 minuti dal loop in main.py.
+    Ritorna True se completata (qualsiasi stato), False se ancora in conversione.
+    """
+    from sqlalchemy.orm.attributes import flag_modified as _fm
+    from sqlalchemy import select as _sa_select
+    from models import GlobalDocument
+
+    # Carica analisi
+    try:
+        async with AsyncSessionLocal() as _s:
+            _a = await _s.get(Analysis, analysis_id)
+            if not _a or _a.processing_status != "pending_conversion":
+                return True
+            _steps     = dict(_a.pipeline_steps or {})
+            _phone     = _a.client_phone or ""
+            _appt_id   = _a.appointment_id or "?"
+            _account   = _a.acuity_account or 1
+            _rs        = _a.client_company or ""
+            _ff        = _a.acuity_form_fields or {}
+            _piva      = _ff.get("piva") or _ff.get("P.IVA") or ""
+            _op        = _a.operator_name or ""
+            _op_email  = _a.operator_email or ""
+            _appt_dt   = _a.appointment_datetime
+            _camp_code = _a.campaign_code or ""
+    except Exception as exc:
+        logger.error("[retry_conv] Load analysis %d failed: %s", analysis_id, exc)
+        return True
+
+    _retry_n = _steps.get("_conv_retry", 0) + 1
+    _MAX     = 6
+
+    if _retry_n > _MAX:
+        _msg = f"Registrazioni non disponibili dopo {_MAX} tentativi automatici (~60 min)"
+        await update_step(analysis_id, 10, "stop", _msg,
+                          detail={"can_upload_audio": True, "can_upload_transcript": True})
+        await _save_error(analysis_id, _appt_id, _msg, _account)
+        return True
+
+    # Aggiorna contatore e imposta processing
+    try:
+        async with AsyncSessionLocal() as _s:
+            async with _s.begin():
+                _a2 = await _s.get(Analysis, analysis_id)
+                if _a2:
+                    _ns = dict(_a2.pipeline_steps or {})
+                    _ns["_conv_retry"] = _retry_n
+                    _a2.pipeline_steps = _ns
+                    _fm(_a2, "pipeline_steps")
+                    _a2.processing_status = "processing"
+    except Exception as exc:
+        logger.warning("[retry_conv] Update counter failed: %s", exc)
+
+    await update_step(analysis_id, 10, "running",
+                      f"Auto-retry #{_retry_n}/{_MAX} — cerco registrazioni...")
+
+    # Helper: torna a pending_conversion
+    async def _back_to_pending(msg: str):
+        await update_step(analysis_id, 10, "running", msg)
+        try:
+            async with AsyncSessionLocal() as _s:
+                async with _s.begin():
+                    _a3 = await _s.get(Analysis, analysis_id)
+                    if _a3:
+                        _a3.processing_status = "pending_conversion"
+        except Exception:
+            pass
+
+    # Download
+    try:
+        _lookback = int(await get_setting("sidial_lookback_days", "90"))
+        _min_s    = int(await get_setting("min_call_length_seconds", "20"))
+        _recs, _stats = await asyncio.wait_for(
+            find_and_download_all_recordings(
+                phone=_phone, campaign_code=_camp_code,
+                lookback_days=_lookback, piva=_piva,
+                ragione_sociale=_rs, min_call_seconds=_min_s,
+                return_stats=True,
+            ),
+            timeout=200,
+        )
+    except Exception as exc:
+        logger.warning("[retry_conv %d] Download failed analysis %d: %s", _retry_n, analysis_id, exc)
+        await _back_to_pending(f"Errore download (retry {_retry_n}/{_MAX}) — riprovo tra 10 min")
+        return False
+
+    if not _recs:
+        if _stats.get("converting_recs", 0) > 0:
+            await _back_to_pending(
+                f"Ancora in conversione (tentativo {_retry_n}/{_MAX}) — prossimo tra 10 min"
+            )
+            return False
+        _sm = f"{_stats.get('leads_found',0)} lead · {_stats.get('total_recs',0)} rec"
+        _msg = f"0 registrazioni trovate dopo {_retry_n} tentativi · {_sm}"
+        await update_step(analysis_id, 10, "stop", _msg,
+                          detail={"can_upload_audio": True, "can_upload_transcript": True})
+        await _save_error(analysis_id, _appt_id, _msg, _account)
+        return True
+
+    # Trovate! Step 10 ok
+    _n    = len(_recs)
+    _ts   = _stats.get("total_seconds", 0)
+    await update_step(analysis_id, 10, "ok", f"{_n} registrazioni · {_ts//60}m {_ts%60:02d}s")
+
+    # Carica campagna
+    from services.campaign_db import get_campaign_by_code as _gcbc
+    _cdb  = await _gcbc(_camp_code)
+    _cinfo = {"raw": _camp_code, "code": _camp_code}
+
+    # Step 11: Trascrizione
+    await update_step(analysis_id, 11, "running", "Trascrizione in corso...")
+    _geng = await get_setting("transcription_engine", "openai")
+    _eng  = (_cdb.transcription_engine if _cdb and _cdb.transcription_engine else None) or _geng
+    _fb   = "openai" if _eng == "assemblyai" else "assemblyai"
+    _parts, _used = [], _eng
+
+    for _i, (_cid, _audio) in enumerate(_recs, 1):
+        _ok = False
+        for _e in [_used, _fb]:
+            try:
+                _t = await transcribe_audio(_audio, engine=_e)
+                if _t and len(_t.strip()) > 20:
+                    _parts.append(f"--- CHIAMATA {_i} (id:{_cid}) ---\n{_t}")
+                    if _e != _used:
+                        _used = _e
+                    _ok = True
+                    break
+            except Exception:
+                continue
+        if not _ok:
+            _parts.append(f"--- CHIAMATA {_i} (id:{_cid}) ---\n[trascrizione non disponibile]")
+
+    _transcript = "\n\n".join(_parts)
+    _clen = len(_transcript.replace("\n","").strip())
+
+    if _clen < 80:
+        _reason = f"Trascrizione troppo breve: {_clen} caratteri"
+        await update_step(analysis_id, 11, "stop", _reason)
+        try:
+            async with AsyncSessionLocal() as _s:
+                async with _s.begin():
+                    _a4 = await _s.get(Analysis, analysis_id)
+                    if _a4:
+                        _a4.processing_status = "completed"
+                        _a4.qualification_level = "errore_tecnico"
+                        _a4.transcript = _transcript
+                        _a4.error_message = _reason
+                        _a4.report_json = {"errore_tecnico": True, "motivo": _reason}
+        except Exception as exc:
+            logger.warning("[retry_conv] Save errore_tecnico failed: %s", exc)
+        return True
+
+    await update_step(analysis_id, 11, "ok", f"{len(_transcript)} caratteri · {_used}")
+
+    # Step 12: AI Analysis
+    await update_step(analysis_id, 12, "running", "Analisi AI in corso...")
+    _gdocs = []
+    try:
+        async with AsyncSessionLocal() as _s:
+            _res = await _s.execute(
+                _sa_select(GlobalDocument)
+                .where(GlobalDocument.is_active == True)
+                .order_by(GlobalDocument.sort_order)
+            )
+            _gdocs = [{"title": d.title, "content": d.content} for d in _res.scalars().all()]
+    except Exception:
+        pass
+
+    from services.prompt_db import get_prompt_sections as _gps
+    _psec = {}
+    try:
+        _psec = await _gps()
+    except Exception:
+        pass
+
+    _report = None
+    for _att in range(1, 3):
+        try:
+            _report = await analyze_call(
+                transcript=_transcript, campaign_info=_cinfo,
+                script=_cdb.script if _cdb else "",
+                qualification_params=_cdb.qualification_params if _cdb else "",
+                client_info=_cdb.client_info if _cdb else "",
+                operator_email=_op_email, prompt_sections=_psec,
+                prompt_extra=_cdb.prompt_extra if _cdb else None,
+                global_docs=_gdocs,
+            )
+            break
+        except Exception as exc:
+            if _att == 2:
+                _msg2 = f"Analisi AI fallita: {exc}"
+                await update_step(analysis_id, 12, "stop", _msg2)
+                await _save_error(analysis_id, _appt_id, _msg2, _account)
+                return True
+
+    _r2l   = {1:"inaccurata",2:"da_migliorare",3:"sufficiente",4:"buona",5:"eccellente"}
+    _qobj  = _report.get("qualificazione", {})
+    if _report.get("errore_tecnico"):
+        _qlev = "errore_tecnico"
+    elif _qobj.get("fuori_parametro"):
+        _qlev = "non_in_target"
+    else:
+        _qlev = _r2l.get(_qobj.get("rating", 2), "da_migliorare")
+
+    await update_step(analysis_id, 12, "ok", f"Qualifica: {_qlev}")
+
+    # Step 13: Salvataggio
+    await update_step(analysis_id, 13, "running", "Salvataggio...")
+    try:
+        _html = generate_html_report(
+            _report, {"datetime": str(_appt_dt or ""), "phone": _phone, "id": _appt_id},
+            _cinfo, operator_name=_op, client_company=_rs,
+        )
+    except Exception:
+        _html = None
+
+    try:
+        await _save_analysis(
+            analysis_id=analysis_id, appointment_id=_appt_id,
+            campaign_code=_camp_code, transcript=_transcript,
+            report=_report, html_report=_html, acuity_account=_account,
+            appointment_dt=_appt_dt, phone=_phone, client_company=_rs,
+            sidial_call_id=",".join(c for c,_ in _recs),
+            operator_name=_op, operator_email=_op_email,
+            qualification_level=_qlev, email_sent=False,
+        )
+        await update_step(analysis_id, 13, "ok", "Salvato")
+    except Exception as exc:
+        logger.error("[retry_conv] Save analysis %d failed: %s", analysis_id, exc)
+        await update_step(analysis_id, 13, "stop", f"Salvataggio fallito: {exc}")
+        return True
+
+    # Step 14: Email
+    await update_step(analysis_id, 14, "running", "Invio email...")
+    if _qlev not in ("non_in_target", "errore_tecnico") and _cdb and not _cdb.email_disabled:
+        try:
+            _recps = list(_cdb.email_recipients or [])
+            if _op_email and not _cdb.email_no_operator and _op_email not in _recps:
+                _recps.insert(0, _op_email)
+            if _INOLTRO not in _recps:
+                _recps.append(_INOLTRO)
+            await send_analysis_report(
+                recipients=_recps, html_content=_html or "",
+                operator_name=_op, qualification_level=_qlev,
+                appointment_datetime=str(_appt_dt or ""),
+            )
+            await update_step(analysis_id, 14, "ok", f"Email inviata a: {', '.join(_recps)}")
+        except Exception as exc:
+            await update_step(analysis_id, 14, "warning", f"Errore email: {exc}")
+    else:
+        await update_step(analysis_id, 14, "ok", f"Nessuna email — {_qlev}")
+
+    logger.info("[retry_conv] Analysis %d completata — qualifica: %s", analysis_id, _qlev)
+    return True
 
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────

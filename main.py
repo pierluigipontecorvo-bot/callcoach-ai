@@ -150,11 +150,44 @@ async def lifespan(app: FastAPI):
             report_json = COALESCE(report_json, '{}'::jsonb) || '{"errore_tecnico": true}'::jsonb
         WHERE processing_status IN ('processing', 'pending')
         """, "reset stuck analyses")
+    # NB: pending_conversion NON viene resettato — il retry loop riprende dopo il restart
 
     logger.info("Startup migrations complete. Server accepting requests.")
+
+    # ── Background: retry loop per registrazioni in conversione ────────────
+    async def _conversion_retry_loop():
+        """Ogni 10 minuti riprova le analisi in pending_conversion."""
+        await _asyncio.sleep(30)   # attendi avvio completo
+        while True:
+            try:
+                from database import AsyncSessionLocal as _ASL2
+                from models import Analysis as _Analysis
+                from sqlalchemy import select as _sel
+                async with _ASL2() as _s:
+                    _res = await _s.execute(
+                        _sel(_Analysis).where(_Analysis.processing_status == "pending_conversion")
+                    )
+                    _pending = [a.id for a in _res.scalars().all()]
+
+                if _pending:
+                    logger.info("Retry conversion: %d analisi pending", len(_pending))
+                    from routers.webhook import retry_conversion_analysis
+                    for _aid in _pending:
+                        try:
+                            await retry_conversion_analysis(_aid)
+                        except Exception as _exc:
+                            logger.warning("Retry analysis %d failed: %s", _aid, _exc)
+            except Exception as _exc:
+                logger.warning("Conversion retry loop error: %s", _exc)
+
+            await _asyncio.sleep(600)   # 10 minuti
+
+    _retry_task = _asyncio.create_task(_conversion_retry_loop())
+
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────
+    _retry_task.cancel()
     logger.info("CallCoach AI shutting down.")
 
 
