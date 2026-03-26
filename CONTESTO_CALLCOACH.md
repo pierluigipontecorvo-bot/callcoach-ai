@@ -24,7 +24,7 @@ Scatta il webhook Acuity → parte la pipeline di analisi in background (14 step
 7  Campagna identificata (prefix matching sul codice)
 8  Operatore identificato (da email/form → tabella operators DB)
 9  Lead trovati su Sidial per numero di telefono del cliente
-10 Registrazioni scaricate da Sidial
+10 registrazioni scaricate da Sidial
 11 Audio trascritto (OpenAI Whisper o AssemblyAI)
 12 Analisi AI eseguita con Claude
 13 Risultato salvato nel database

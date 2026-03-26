@@ -1,24 +1,27 @@
 """
-Sidial CRM client — implementazione corretta basata su DOC-010.
+Sidial CRM client — COMPLETAMENTE SINCRONO in thread dedicato.
 
-Flusso:
-  1. POST a=searchLeads  — trova leadId dal numero di telefono (filtro JSON params)
-  2. POST a=searchRecs   — lista registrazioni del lead (tabella leadsRecs)
-  3. GET  a=getLeadRec   — scarica singola registrazione per id numerico
+Architettura:
+  - find_and_download_all_recordings() è l'unica funzione pubblica async.
+  - Internamente chiama _find_all_sync() via asyncio.to_thread().
+  - _find_all_sync() fa TUTTO in un singolo thread con httpx.Client sync.
+  - Nessun asyncio all'interno del thread → nessun problema di cancellazione.
+  - ThreadPoolExecutor dedicato (max 4 worker) → nessuna contesa con il resto.
 
-STRATEGIA RICERCA (deadline globale 180s):
-  - Ogni singola HTTP call wrappata in asyncio.wait_for(timeout=12)
-  - Deadline globale di 180s: se superata, STOP immediato
-  - NESSUN short-circuit: cerca TUTTE le varianti telefono + P.IVA + RS
-    (il lead con registrazioni può essere in campagna diversa)
+Flusso Sidial API:
+  1. POST a=searchLeads  — trova lead per telefono / P.IVA / RS
+  2. POST a=searchRecs   — lista registrazioni del lead
+  3. GET  a=getLeadRec   — scarica audio registrazione
 """
 
 import asyncio
+import functools
 import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
 import httpx
@@ -30,23 +33,19 @@ logger = logging.getLogger(__name__)
 _BASE  = settings.sidial_api_url.rstrip("/")
 _TOKEN = settings.sidial_api_token
 
-# Timeout per client SINCRONO in thread — non hanno problemi asyncio
-_HTTP_TIMEOUT    = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
-_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0)
+# Executor DEDICATO — max 4 thread contemporanei (4 analisi parallele)
+# Separato dal ThreadPoolExecutor di sistema → nessuna contesa
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sidial")
 
-# Deadline globale per tutta la ricerca + download Sidial
-_GLOBAL_DEADLINE = 180  # secondi (3 minuti — file grandi su server lento)
+# Deadline interna del thread (secondi) — INDIPENDENTE da asyncio
+_THREAD_DEADLINE = 120   # 2 minuti max per l'intero thread
 
+# Campi telefono Sidial
 _PHONE_FIELDS = ("phone1", "phone2", "phone3", "phone4")
 
 
 class SidialDeadlineError(TimeoutError):
-    """Deadline globale Sidial superata."""
-    pass
-
-
-def _log_config() -> None:
-    logger.info("Sidial config: BASE=%s token_len=%d", _BASE, len(_TOKEN))
+    """Deadline thread Sidial superata."""
 
 
 # ── Normalizzazione telefono ──────────────────────────────────────────────────
@@ -77,337 +76,320 @@ def _phone_variants(raw: str) -> list[str]:
     return variants
 
 
-# ── Singola ricerca API con timeout DURO ─────────────────────────────────────
+# ── Nucleo SINCRONO — tutto gira in un singolo thread ────────────────────────
 
-def _sync_post(data: dict) -> Optional[httpx.Response]:
-    """POST SINCRONO — usato via asyncio.to_thread, nessun problema asyncio."""
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
-            return client.post(_BASE, data=data)
-    except httpx.TimeoutException:
-        logger.warning("Sidial: POST timeout")
-        return None
-    except Exception as exc:
-        logger.warning("Sidial: POST errore: %s", exc)
-        return None
+def _find_all_sync(
+    phone: str,
+    piva: str,
+    ragione_sociale: str,
+    last_name: str,
+    lookback_days: int,
+    min_call_seconds: int,
+    max_recs: int,
+) -> tuple[list, dict]:
+    """
+    COMPLETAMENTE SINCRONO.
+    Eseguito in thread dedicato via asyncio.to_thread — zero asyncio qui dentro.
+    Timeout httpx nativi (connect=5s, read=10s, total=15s).
+    Deadline interna: _THREAD_DEADLINE secondi dall'inizio.
+    """
+    t0 = time.monotonic()
+    deadline = t0 + _THREAD_DEADLINE
 
+    # ── HTTP helper ──────────────────────────────────────────────────────
+    _TO = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
+    _DL = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0)
 
-async def _safe_post(data: dict) -> Optional[httpx.Response]:
-    """Esegue _sync_post in un thread — non blocca l'event loop."""
-    return await asyncio.to_thread(_sync_post, data)
+    def _post(data: dict) -> Optional[httpx.Response]:
+        if time.monotonic() > deadline:
+            return None
+        try:
+            with httpx.Client(timeout=_TO) as c:
+                return c.post(_BASE, data=data)
+        except httpx.TimeoutException:
+            logger.warning("Sidial POST timeout: a=%s", data.get("a"))
+            return None
+        except Exception as exc:
+            logger.warning("Sidial POST error: %s", exc)
+            return None
 
+    def _get_url(url: str) -> Optional[httpx.Response]:
+        if time.monotonic() > deadline:
+            return None
+        try:
+            with httpx.Client(timeout=_DL, follow_redirects=True) as c:
+                return c.get(url)
+        except httpx.TimeoutException:
+            logger.warning("Sidial GET timeout: %s", url[:80])
+            return None
+        except Exception as exc:
+            logger.warning("Sidial GET error: %s", exc)
+            return None
 
-async def _search_leads_single(
-    field: str,
-    value: str,
-    operator: str = "=",
-    deadline: float = 0,
-) -> list[dict]:
-    """Una singola chiamata searchLeads — client nuovo ogni volta."""
-    if deadline and time.monotonic() > deadline:
-        return []
-
-    params_json = json.dumps([{
-        "table": "leads", "field": field, "operator": operator, "value": value,
-    }])
-    resp = await _safe_post({
-        "a": "searchLeads", "apiToken": _TOKEN, "params": params_json,
-    })
-    if resp is None:
-        return []
-    if resp.status_code not in (200, 404):
-        logger.warning("searchLeads HTTP %s field=%s val=%s", resp.status_code, field, value[:30])
-        return []
-    try:
-        data = resp.json()
-    except Exception:
-        return []
-    if isinstance(data, dict):
-        if data.get("response", {}).get("error"):
+    # ── Ricerca lead ─────────────────────────────────────────────────────
+    def _search(field: str, value: str, operator: str = "=") -> list[dict]:
+        pj = json.dumps([{"table": "leads", "field": field, "operator": operator, "value": value}])
+        r = _post({"a": "searchLeads", "apiToken": _TOKEN, "params": pj})
+        if r is None or r.status_code not in (200, 404):
             return []
-        if "results" in data:
-            return data["results"]
-    if isinstance(data, list):
-        return data
-    return []
+        try:
+            d = r.json()
+        except Exception:
+            return []
+        if isinstance(d, list):
+            return d
+        if isinstance(d, dict):
+            if d.get("response", {}).get("error"):
+                return []
+            return d.get("results", [])
+        return []
 
+    def _dedup(leads: list[dict]) -> list[dict]:
+        seen: set = set()
+        out: list = []
+        for lead in leads:
+            lid = str(lead.get("id") or "")
+            if lid and lid not in seen:
+                seen.add(lid)
+                out.append(lead)
+        return out
 
-def _dedup_leads(leads: list[dict]) -> list[dict]:
-    seen: set = set()
-    unique: list[dict] = []
-    for lead in leads:
-        lid = str(lead.get("id") or "")
-        if lid and lid not in seen:
-            seen.add(lid)
-            unique.append(lead)
-    return unique
+    # ── Registrazioni per lead ───────────────────────────────────────────
+    def _get_recs(lead_id: str) -> list[dict]:
+        if time.monotonic() > deadline:
+            return []
+        f = json.dumps([{"table": "leadsRecs", "field": "lead", "operator": "=", "value": int(lead_id)}])
+        r = _post({"a": "searchRecs", "apiToken": _TOKEN, "params": f})
+        if r is None or r.status_code == 404:
+            return []
+        if r.status_code != 200:
+            return []
+        try:
+            d = r.json()
+        except Exception:
+            return []
+        if isinstance(d, list):
+            return d
+        if isinstance(d, dict):
+            return d.get("results", [])
+        return []
 
+    # ── Download registrazione ───────────────────────────────────────────
+    def _download(rec_id: str) -> tuple[Optional[bytes], str]:
+        if time.monotonic() > deadline:
+            return None, "deadline"
+        url = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
+        r = _get_url(url)
+        if r is None:
+            return None, "timeout/error"
+        ct = r.headers.get("content-type", "")
+        body = r.content
+        if r.status_code == 200 and len(body) > 1000:
+            if "text/html" not in ct and body[:1] not in (b"<", b"{"):
+                return body, ""
+            if "application/json" in ct or body[:1] in (b"{", b"["):
+                try:
+                    data = json.loads(body)
+                    for key in ("url", "recording_url", "audio_url", "file_url", "path"):
+                        rec_url = data.get(key)
+                        if rec_url:
+                            r2 = _get_url(rec_url)
+                            if r2 and r2.status_code == 200 and len(r2.content) > 1000:
+                                return r2.content, ""
+                except Exception:
+                    pass
+        # Strategia 2: POST
+        if time.monotonic() < deadline:
+            try:
+                with httpx.Client(timeout=_DL) as c:
+                    r2 = c.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN})
+                if r2.status_code == 200 and len(r2.content) > 1000:
+                    ct2 = r2.headers.get("content-type", "")
+                    if "text/html" not in ct2 and r2.content[:1] not in (b"<", b"{"):
+                        return r2.content, ""
+            except Exception:
+                pass
+        return None, f"HTTP {r.status_code}, ct={ct[:30]}"
 
-# ── Ricerche composite ───────────────────────────────────────────────────────
-
-async def _search_phone_exact(variants: list[str], deadline: float) -> list[dict]:
-    """
-    Cerca TUTTE le varianti × TUTTI i campi — COMPLETAMENTE SEQUENZIALE.
-    No asyncio.gather: elimina problemi di cancellazione in BackgroundTask.
-    Ogni request ha timeout httpx nativo (connect=5s, read=10s).
-    """
+    # ── FASE A: ricerca lead ─────────────────────────────────────────────
     all_leads: list[dict] = []
+    variants = _phone_variants(phone)
+    logger.info("Sidial thread: phone=%s variants=%s piva=%s rs=%s",
+                phone, variants, piva or "—", ragione_sociale or "—")
+
+    # Telefono — TUTTE le varianti × tutti i campi (no short-circuit)
     for v in variants:
         for f in _PHONE_FIELDS:
-            if deadline and time.monotonic() > deadline:
-                logger.info("Sidial phone search: deadline superata, stop")
-                return _dedup_leads(all_leads)
-            leads = await _search_leads_single(f, v, deadline=deadline)
+            if time.monotonic() > deadline:
+                break
+            leads = _search(f, v)
             if leads:
                 logger.info("Sidial: %d lead con %s=%s", len(leads), f, v)
-                all_leads.extend(leads)
-    deduped = _dedup_leads(all_leads)
-    if deduped:
-        logger.info("Sidial: telefono totale: %d lead unici", len(deduped))
-    return deduped
+            all_leads.extend(leads)
 
-
-async def _search_phone_like(last_digits: str, deadline: float) -> list[dict]:
-    """Cerca con LIKE gli ultimi digit su phone1-4 — SEQUENZIALE."""
-    all_leads: list[dict] = []
-    for f in _PHONE_FIELDS:
-        if deadline and time.monotonic() > deadline:
-            break
-        leads = await _search_leads_single(f, last_digits, operator="like", deadline=deadline)
-        all_leads.extend(leads)
-    return _dedup_leads(all_leads)
-
-
-async def _search_fallback(piva: str, ragione_sociale: str, last_name: str, deadline: float) -> list[dict]:
-    """Cerca P.IVA + Ragione Sociale — COMPLETAMENTE SEQUENZIALE."""
-    all_leads: list[dict] = []
+    # P.IVA
     if piva:
         for f in ("vat", "piva", "partitaiva", "fiscal_code", "codfis", "taxid", "cf"):
-            if deadline and time.monotonic() > deadline:
+            if time.monotonic() > deadline:
                 break
-            leads = await _search_leads_single(f, piva, deadline=deadline)
+            leads = _search(f, piva)
             if leads:
                 logger.info("Sidial: %d lead con piva:%s", len(leads), f)
-                all_leads.extend(leads)
+            all_leads.extend(leads)
+
+    # Ragione Sociale / last_name
     rs = ragione_sociale or last_name
     if rs:
-        for f in ("companyName", "company", "ragioneSociale", "businessName", "name", "ragione_sociale", "surname"):
-            if deadline and time.monotonic() > deadline:
+        for f in ("companyName", "company", "ragioneSociale", "businessName",
+                  "name", "ragione_sociale", "surname"):
+            if time.monotonic() > deadline:
                 break
-            leads = await _search_leads_single(f, rs, operator="like", deadline=deadline)
+            leads = _search(f, rs, "like")
             if leads:
                 logger.info("Sidial: %d lead con rs:%s", len(leads), f)
-                all_leads.extend(leads)
-    return _dedup_leads(all_leads)
+            all_leads.extend(leads)
 
+    all_leads = _dedup(all_leads)
+    elapsed_a = time.monotonic() - t0
+    logger.info("Sidial: %d lead unici in %.1fs", len(all_leads), elapsed_a)
 
-# ── Raccolta lead — TUTTI i parametri, NESSUN short-circuit ──────────────────
+    _phone_vars = variants
+    _empty = {
+        "leads_found": 0, "total_recs": 0, "recent_recs": 0,
+        "converting_recs": 0, "total_seconds": 0,
+        "search_method": "nessuno", "phone_variants": _phone_vars,
+        "elapsed_seconds": int(elapsed_a),
+    }
 
-async def _collect_all_leads(
-    phone: str,
-    piva: str = "",
-    ragione_sociale: str = "",
-    last_name: str = "",
-    progress_cb=None,
-    deadline: float = 0,
-) -> tuple[list[dict], int, str]:
-    """
-    Cerca lead con TUTTI i parametri disponibili e raccoglie TUTTI i risultati.
-    NON fa short-circuit — il lead con le registrazioni potrebbe essere
-    trovato da P.IVA e non da telefono (es. campagne diverse stesso numero).
-    """
-    variants = _phone_variants(phone)
-    logger.info("Sidial: varianti telefono: %s, piva=%s, rs=%s",
-                variants, piva or "—", ragione_sociale or "—")
+    if not all_leads:
+        return [], _empty
 
-    async def _progress(msg):
-        if progress_cb:
+    # ── FASE B: registrazioni per ogni lead ──────────────────────────────
+    seen_ids: set = set()
+    all_recs: list[dict] = []
+
+    for lead in all_leads:
+        if time.monotonic() > deadline:
+            break
+        lid = str(lead.get("id") or "")
+        if not lid:
+            continue
+        recs = _get_recs(lid)
+        for r in recs:
+            rid = str(r.get("id") or "")
+            if rid and rid not in seen_ids:
+                seen_ids.add(rid)
+                r["_lead_id"] = lid
+                all_recs.append(r)
+
+    elapsed_b = time.monotonic() - t0
+
+    # ── FASE C: filtra e ordina ───────────────────────────────────────────
+    now_utc = datetime.now(tz=timezone.utc)
+    cutoff = now_utc - timedelta(days=lookback_days)
+
+    def _rec_dt(rec: dict) -> Optional[datetime]:
+        val = rec.get("createdWhen")
+        if not val:
+            return None
+        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
             try:
-                await progress_cb(msg)
-            except Exception:
+                dt = datetime.strptime(str(val)[:25], fmt)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except ValueError:
                 pass
-
-    def _check_deadline(phase):
-        if deadline and time.monotonic() > deadline:
-            elapsed = int(time.monotonic() - (deadline - _GLOBAL_DEADLINE))
-            raise SidialDeadlineError(f"Deadline {_GLOBAL_DEADLINE}s superata alla {phase} (elapsed: {elapsed}s)")
-
-    all_leads: list[dict] = []
-    methods: list[str] = []
-
-    # ── Telefono esatto (sequenziale per variante, 4 campi paralleli) ─
-    if variants:
-        _check_deadline("telefono")
-        await _progress(f"Ricerca telefono ({len(variants)} varianti)...")
-        phone_leads = await _search_phone_exact(variants, deadline)
-        if phone_leads:
-            all_leads.extend(phone_leads)
-            methods.append(f"tel:{len(phone_leads)}")
-            await _progress(f"Telefono: {len(phone_leads)} lead")
-
-    # ── P.IVA + Ragione Sociale (in parallelo) ───────────────────────
-    if piva or ragione_sociale or last_name:
-        _check_deadline("piva/rs")
-        await _progress("Ricerca P.IVA / Ragione Sociale...")
-        fallback_leads = await _search_fallback(piva, ragione_sociale, last_name, deadline)
-        if fallback_leads:
-            all_leads.extend(fallback_leads)
-            methods.append(f"piva_rs:{len(fallback_leads)}")
-            await _progress(f"P.IVA/RS: +{len(fallback_leads)} lead")
-
-    # ── Deduplica ────────────────────────────────────────────────────
-    unique = _dedup_leads(all_leads)
-    method_str = "+".join(methods) if methods else "nessuno"
-
-    if unique:
-        logger.info("Sidial: %d lead unici trovati (metodi: %s)", len(unique), method_str)
-        await _progress(f"{len(unique)} lead unici trovati ({method_str})")
-        return unique, len(methods), method_str
-
-    logger.warning("Sidial: 0 lead (phone=%s piva=%s rs=%s)", phone, piva or "—", ragione_sociale or "—")
-    await _progress("Nessun lead trovato")
-    return [], 0, "nessuno"
-
-
-# ── Ricerca registrazioni per leadId ─────────────────────────────────────────
-
-async def _search_recs_by_lead(lead_id: str, deadline: float = 0) -> list[dict]:
-    """POST a=searchRecs — client nuovo ogni volta."""
-    if deadline and time.monotonic() > deadline:
-        logger.warning("searchRecs: deadline superata, skip leadId=%s", lead_id)
-        return []
-
-    filters = [{"table": "leadsRecs", "field": "lead", "operator": "=", "value": int(lead_id)}]
-    resp = await _safe_post({
-        "a": "searchRecs", "apiToken": _TOKEN, "params": json.dumps(filters),
-    })
-    if resp is None:
-        return []
-    if resp.status_code == 404:
-        return []
-    if resp.status_code != 200:
-        logger.error("searchRecs HTTP %s per leadId=%s", resp.status_code, lead_id)
-        return []
-    try:
-        data = resp.json()
-    except Exception:
-        return []
-    if isinstance(data, list):
-        logger.info("searchRecs: %d registrazioni per leadId=%s", len(data), lead_id)
-        return data
-    if isinstance(data, dict):
-        if data.get("response", {}).get("error"):
-            return []
-        if "results" in data:
-            recs = data["results"]
-            logger.info("searchRecs: %d registrazioni per leadId=%s", len(recs), lead_id)
-            return recs
-    return []
-
-
-def _parse_rec_datetime(rec: dict) -> Optional[datetime]:
-    val = rec.get("createdWhen")
-    if not val:
         return None
-    if isinstance(val, (int, float)):
-        return datetime.fromtimestamp(val, tz=timezone.utc)
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-    ):
+
+    def _dur(rec: dict) -> int:
         try:
-            dt = datetime.strptime(str(val), fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except ValueError:
-            pass
-    return None
+            return int(rec.get("callLength") or 0)
+        except Exception:
+            return 0
+
+    def _converted(rec: dict) -> bool:
+        return str(rec.get("converted") or "n").lower() == "y"
+
+    # Conta statistiche PRIMA del filtraggio
+    total_recs_count = len(all_recs)
+    converting_count = sum(1 for r in all_recs if not _converted(r))
+
+    # Recenti
+    recent = [r for r in all_recs
+              if (_rec_dt(r) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff]
+
+    candidates = recent if recent else all_recs[:5]
+
+    # Converted e durata sufficiente
+    useful = sorted(
+        [r for r in candidates if _converted(r) and _dur(r) >= min_call_seconds],
+        key=_dur, reverse=True,
+    )[:max_recs]
+
+    methods = []
+    if any(str(l.get("id")) in {str(r.get("_lead_id")) for r in useful}
+           for l in all_leads[:len(variants) * 4]):
+        methods.append(f"tel:{len(all_leads)}")
+    else:
+        methods.append(f"tel+piva_rs:{len(all_leads)}")
+
+    logger.info("Sidial: leads=%d | recs=%d | recent=%d | useful=%d | converting=%d | %.1fs",
+                len(all_leads), total_recs_count, len(recent), len(useful),
+                converting_count, elapsed_b)
+
+    stats: dict = {
+        "leads_found": len(all_leads),
+        "total_recs": total_recs_count,
+        "recent_recs": len(recent),
+        "converting_recs": converting_count,
+        "total_seconds": 0,
+        "search_method": "+".join(methods) or "nessuno",
+        "phone_variants": _phone_vars,
+        "elapsed_seconds": int(elapsed_b),
+    }
+
+    if not useful:
+        return [], stats
+
+    # ── FASE D: download ──────────────────────────────────────────────────
+    downloaded: list[Tuple[str, bytes]] = []
+    total_secs = 0
+
+    for rec in useful:
+        if time.monotonic() > deadline:
+            logger.warning("Sidial: deadline durante download, fermato a %d/%d",
+                           len(downloaded), len(useful))
+            break
+        rid = str(rec.get("id") or "")
+        if not rid:
+            continue
+        call_len = _dur(rec)
+        audio, err = _download(rid)
+        if audio:
+            downloaded.append((rid, audio))
+            total_secs += call_len
+            logger.info("Sidial: ✓ rec %s (%ds, %d bytes)", rid, call_len, len(audio))
+        else:
+            logger.warning("Sidial: ✗ rec %s: %s", rid, err)
+
+    elapsed_tot = time.monotonic() - t0
+    stats["total_seconds"] = total_secs
+    stats["elapsed_seconds"] = int(elapsed_tot)
+    logger.info("Sidial: %d/%d scaricate | %ds audio | %.1fs totali",
+                len(downloaded), len(useful), total_secs, elapsed_tot)
+    return downloaded, stats
 
 
-# ── Download singola registrazione ────────────────────────────────────────────
-
-def _time_left(deadline: float, max_sec: float = 15.0) -> float:
-    """Calcola secondi rimasti fino alla deadline."""
-    if not deadline:
-        return max_sec
-    left = deadline - time.monotonic()
-    return max(0, min(left, max_sec))
-
-
-def _sync_download_rec(rec_id: str) -> tuple[Optional[bytes], str]:
-    """
-    Download SINCRONO con 2 strategie — usato via asyncio.to_thread.
-    Nessun asyncio, nessun problema di cancellazione.
-    """
-    url1 = f"{_BASE}?a=getLeadRec&id={rec_id}&apiToken={_TOKEN}"
-    try:
-        with httpx.Client(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(url1)
-        ct = resp.headers.get("content-type", "")
-        body = resp.content
-
-        ct = resp.headers.get("content-type", "")
-        body = resp.content
-
-        if resp.status_code != 200:
-            # Strategia 2: POST
-            resp2 = client.post(_BASE, data={"a": "getLeadRec", "id": rec_id, "apiToken": _TOKEN})
-            if resp2.status_code == 200 and len(resp2.content) > 1000:
-                ct2 = resp2.headers.get("content-type", "")
-                if "text/html" not in ct2 and resp2.content[:1] not in (b"<", b"{"):
-                    logger.info("download POST rec_id=%s OK: %d bytes", rec_id, len(resp2.content))
-                    return resp2.content, ""
-            return None, f"GET HTTP {resp.status_code} · POST HTTP {resp2.status_code}"
-
-        if any(x in ct for x in ("text/html", "text/xml", "text/plain")):
-            return None, f"content-type non audio: {ct}"
-
-        if "application/json" in ct or body[:1] in (b"{", b"["):
-            try:
-                data = json.loads(body)
-                for key in ("url", "recording_url", "audio_url", "file_url", "path"):
-                    rec_url = data.get(key)
-                    if rec_url:
-                        r2 = client.get(rec_url)
-                        if r2.status_code == 200 and len(r2.content) > 1000:
-                            return r2.content, ""
-            except Exception:
-                pass
-            return None, f"JSON senza audio URL"
-
-        if body[:1] in (b"<",):
-            return None, "contenuto HTML"
-
-        if len(body) < 1000:
-            return None, f"troppo piccolo ({len(body)} bytes)"
-
-        logger.info("download rec_id=%s OK: %d bytes ct=%s", rec_id, len(body), ct)
-        return body, ""
-
-    except httpx.TimeoutException as exc:
-        return None, f"TIMEOUT: {type(exc).__name__}"
-    except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-async def _download_rec(rec_id: str, deadline: float = 0) -> tuple[Optional[bytes], str]:
-    """Download via thread sincrono — nessun problema asyncio."""
-    if _time_left(deadline) <= 0:
-        return None, "deadline scaduta"
-    return await asyncio.to_thread(_sync_download_rec, rec_id)
-
-
-# ── Facciata pubblica ─────────────────────────────────────────────────────────
+# ── Wrapper async pubblico ────────────────────────────────────────────────────
 
 async def find_and_download_all_recordings(
     phone: str,
     campaign_code: Optional[str] = None,
     appointment_dt: Optional[datetime] = None,
     lookback_days: int = 90,
-    max_recs: int = 20,
+    max_recs: int = 10,
     piva: str = "",
     ragione_sociale: str = "",
     last_name: str = "",
@@ -416,186 +398,61 @@ async def find_and_download_all_recordings(
     progress_cb=None,
 ) -> "list[Tuple[str, bytes]] | tuple[list[Tuple[str, bytes]], dict]":
     """
-    Trova e scarica le registrazioni con DEADLINE globale.
-    Se supera _GLOBAL_DEADLINE secondi, interrompe tutto e restituisce quello che ha.
+    Async wrapper: esegue TUTTO in un thread dedicato (executor separato).
+    Un singolo asyncio.to_thread per tutta l'operazione — nessuna contesa.
     """
-    from datetime import timedelta
+    # Aggiorna progress prima di entrare nel thread (è async, non può farlo il thread)
+    if progress_cb:
+        try:
+            await progress_cb(
+                f"Ricerca lead (tel: {_normalize_phone(phone)}, "
+                f"piva: {piva or '—'}, rs: {ragione_sociale or '—'})..."
+            )
+        except Exception:
+            pass
 
-    _log_config()
-    norm_phone = _normalize_phone(phone)
-    now_utc = datetime.now(tz=timezone.utc)
-    cutoff = now_utc - timedelta(days=lookback_days)
-    deadline = time.monotonic() + _GLOBAL_DEADLINE
-    t0 = time.monotonic()
+    logger.info("Sidial: avvio thread — phone=%s piva=%s rs=%s",
+                phone, piva or "—", ragione_sociale or "—")
 
-    logger.info(
-        "Sidial: ricerca — phone=%s (norm=%s) piva=%s rs=%s deadline=%ds",
-        phone, norm_phone, piva or "—", ragione_sociale or "—", _GLOBAL_DEADLINE,
+    fn = functools.partial(
+        _find_all_sync,
+        phone=phone,
+        piva=piva,
+        ragione_sociale=ragione_sociale,
+        last_name=last_name,
+        lookback_days=lookback_days,
+        min_call_seconds=min_call_seconds,
+        max_recs=max_recs,
     )
 
-    async def _progress(msg):
-        if progress_cb:
-            try:
-                await progress_cb(msg)
-            except Exception:
-                pass
+    try:
+        loop = asyncio.get_running_loop()
+        recordings, stats = await loop.run_in_executor(_EXECUTOR, fn)
+    except Exception as exc:
+        logger.error("Sidial: thread error: %s", exc, exc_info=True)
+        _empty = {
+            "leads_found": 0, "total_recs": 0, "recent_recs": 0,
+            "converting_recs": 0, "total_seconds": 0,
+            "search_method": f"errore:{type(exc).__name__}",
+            "phone_variants": _phone_variants(phone),
+        }
+        return ([], _empty) if return_stats else []
 
-    # ── FASE A: raccogli lead con short-circuit ───────────────────────────
-    all_leads, search_params_used, search_method = await _collect_all_leads(
-        phone=phone, piva=piva,
-        ragione_sociale=ragione_sociale, last_name=last_name,
-        progress_cb=progress_cb, deadline=deadline,
-    )
+    if progress_cb:
+        try:
+            n_recs = stats.get("total_recs", 0)
+            n_leads = stats.get("leads_found", 0)
+            n_dl = len(recordings)
+            await progress_cb(
+                f"{n_leads} lead · {n_recs} rec totali · {n_dl} scaricate"
+            )
+        except Exception:
+            pass
 
-    elapsed_a = int(time.monotonic() - t0)
-    logger.info("Sidial: FASE A completata in %ds — %d lead, metodo=%s", elapsed_a, len(all_leads), search_method)
-
-    _empty_stats = {
-        "leads_found": 0, "total_recs": 0, "recent_recs": 0,
-        "converting_recs": 0, "total_seconds": 0, "search_params_used": 0,
-        "search_method": "nessuno",
-        "phone_variants": _phone_variants(phone),
-        "elapsed_seconds": elapsed_a,
-    }
-
-    if not all_leads:
-        logger.warning("Sidial: 0 lead trovati (elapsed: %ds)", elapsed_a)
-        return ([], _empty_stats) if return_stats else []
-
-    # ── FASE B: raccogli registrazioni ────────────────────────────────────
-    await _progress(f"{len(all_leads)} lead trovati in {elapsed_a}s — cerco registrazioni...")
-    seen_rec_ids: set = set()
-    all_recs: list[dict] = []
-
-    for i, lead in enumerate(all_leads):
-        if time.monotonic() > deadline:
-            await _progress(f"Deadline! Interrotto dopo {i}/{len(all_leads)} lead")
-            break
-        lead_id = str(lead.get("id") or "")
-        if not lead_id:
-            continue
-        await _progress(f"searchRecs lead {i+1}/{len(all_leads)} (id={lead_id})...")
-        recs = await _search_recs_by_lead(lead_id, deadline=deadline)
-        for r in recs:
-            rid = str(r.get("id") or "")
-            if rid and rid not in seen_rec_ids:
-                seen_rec_ids.add(rid)
-                r["_lead_id"] = lead_id
-                all_recs.append(r)
-        elapsed_bi = int(time.monotonic() - t0)
-        await _progress(f"Lead {i+1}/{len(all_leads)}: {len(all_recs)} rec trovate ({elapsed_bi}s)")
-
-    elapsed_b = int(time.monotonic() - t0)
-
-    if not all_recs:
-        logger.warning("Sidial: 0 registrazioni per %d lead (elapsed: %ds)", len(all_leads), elapsed_b)
-        await _progress(f"0 registrazioni trovate per {len(all_leads)} lead ({elapsed_b}s)")
-        _no_recs_stats = {**_empty_stats, "leads_found": len(all_leads), "search_method": search_method, "elapsed_seconds": elapsed_b}
-        return ([], _no_recs_stats) if return_stats else []
-
-    # ── FASE C: filtra per lookback_days + ordina per durata DESC ────────
-    _MIN_SEC = max(10, min_call_seconds)
-
-    all_recs_sorted = sorted(
-        all_recs,
-        key=lambda r: int(r.get("callLength") or 0),
-        reverse=True,  # le più lunghe PRIMA — la chiamata di vendita è la più lunga
-    )
-    logger.info("Sidial: %d registrazioni totali, top callLength=%ss",
-                len(all_recs_sorted),
-                all_recs_sorted[0].get("callLength") if all_recs_sorted else "?")
-
-    recent = [
-        r for r in all_recs_sorted
-        if (_parse_rec_datetime(r) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff
-    ]
-
-    if recent:
-        candidates = recent
-    else:
-        candidates = all_recs_sorted[:3]
-        logger.warning("Sidial: nessuna rec recente — uso le 3 più lunghe")
-
-    # Filtra per durata minima e converted=y
-    useful = [
-        r for r in candidates
-        if int(r.get("callLength") or 0) >= _MIN_SEC
-        and (r.get("converted") or "n").lower() == "y"
-    ]
-
-    # Se nessuna converted, tieni le non-converted come "pending"
-    pending_long = [
-        r for r in candidates
-        if int(r.get("callLength") or 0) >= _MIN_SEC
-        and (r.get("converted") or "n").lower() != "y"
-    ]
-
-    if not useful and not pending_long:
-        # Nessuna con durata sufficiente — usa la più lunga disponibile
-        useful = [r for r in candidates if (r.get("converted") or "n").lower() == "y"][:1]
-
-    # LIMITE: scarica max 10 registrazioni (ordinate per durata)
-    _MAX_DOWNLOAD = 10
-    useful = useful[:_MAX_DOWNLOAD]
-
-    await _progress(f"{len(useful)} registrazioni da scaricare (max {_MAX_DOWNLOAD}, ordinate per durata)...")
-    logger.info(
-        "Sidial: %d lead | %d rec tot | %d recenti | %d utili | %d pending | metodo=%s | elapsed=%ds",
-        len(all_leads), len(all_recs_sorted), len(recent), len(useful), len(pending_long), search_method, elapsed_b,
-    )
-    for j, r in enumerate(useful[:5]):
-        logger.info("  → [%d] rec_id=%s callLength=%ss converted=%s",
-                     j+1, r.get("id"), r.get("callLength"), r.get("converted"))
-
-    stats: dict = {
-        "leads_found": len(all_leads),
-        "total_recs": len(all_recs_sorted),
-        "recent_recs": len(recent),
-        "converting_recs": len(pending_long),
-        "total_seconds": 0,
-        "search_params_used": search_params_used,
-        "search_method": search_method,
-    }
-
-    # ── FASE E: scarica (client nuovo per ogni tentativo) ──────────────
-    results: list[Tuple[str, bytes]] = []
-    total_secs = 0
-    failed = 0
-    fail_reasons: list[str] = []
-
-    for i, rec in enumerate(useful):
-        if time.monotonic() > deadline:
-            await _progress(f"Deadline! Scaricate {len(results)}/{len(useful)}")
-            break
-
-        rec_id = str(rec.get("id") or "")
-        if not rec_id:
-            continue
-        call_len = int(rec.get("callLength") or 0)
-
-        await _progress(f"Download {i+1}/{len(useful)} (rec_id={rec_id}, {call_len}s)...")
-        audio_bytes, fail_reason = await _download_rec(rec_id, deadline=deadline)
-        if audio_bytes:
-            results.append((rec_id, audio_bytes))
-            total_secs += call_len
-            await _progress(f"✓ {len(results)}/{len(useful)} scaricate ({call_len}s)")
-        else:
-            failed += 1
-            fail_reasons.append(f"rec={rec_id}: {fail_reason}")
-            await _progress(f"✗ Download {i+1} fallito: {fail_reason}")
-            logger.warning("Sidial: no audio rec_id=%s: %s (failed=%d)", rec_id, fail_reason, failed)
-
-    stats["total_seconds"] = total_secs
-    stats["download_failures"] = fail_reasons[:5]
-    elapsed_tot = int(time.monotonic() - t0)
-    stats["elapsed_seconds"] = elapsed_tot
-    logger.info("Sidial: %d/%d scaricate · %ds audio · %ds elapsed", len(results), len(useful), total_secs, elapsed_tot)
-
-    if return_stats:
-        return results, stats
-    return results
+    return (recordings, stats) if return_stats else recordings
 
 
+# Alias per compatibilità con vecchio codice
 async def find_and_download_recording(
     phone: str,
     appointment_datetime: str,

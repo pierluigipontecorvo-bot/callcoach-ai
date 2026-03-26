@@ -25,7 +25,7 @@ import time as _time_mod
 from urllib.parse import parse_qs
 
 # Versione pipeline — visibile nello step 1 per verificare deploy
-_PIPELINE_VERSION = "v2024-03-26a"
+_PIPELINE_VERSION = "v2026-03-26b"
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -177,11 +177,13 @@ async def run_analysis_pipeline(
     appointment_data: dict,
     acuity_account: int,
     engine_override: str | None = None,
+    preexisting_analysis_id: int | None = None,
 ):
     """Safe wrapper — catches any unhandled exception and saves error to DB."""
     appointment_id = str(appointment_data.get("id", "unknown"))
     try:
-        await _run_pipeline_inner(appointment_data, acuity_account, engine_override)
+        await _run_pipeline_inner(appointment_data, acuity_account, engine_override,
+                                   preexisting_analysis_id)
     except Exception as exc:
         logger.exception("[%s] PIPELINE CRASH: %s", appointment_id, exc)
         try:
@@ -209,6 +211,7 @@ async def _run_pipeline_inner(
     appointment_data: dict,
     acuity_account: int,
     engine_override: str | None = None,
+    preexisting_analysis_id: int | None = None,
 ):
     """
     14-step analysis pipeline with semaphore status tracking.
@@ -248,8 +251,44 @@ async def _run_pipeline_inner(
         )
         return
 
-    # ── Create analysis record immediately (visible in UI) ────────────────────
-    analysis_id = await _create_processing_record(appointment_id, acuity_account)
+    # ── Check if email was already sent for this appointment (any previous record) ─
+    _skip_email = False
+    try:
+        async with AsyncSessionLocal() as _s:
+            _res = await _s.execute(
+                select(Analysis).where(
+                    Analysis.appointment_id == appointment_id,
+                    Analysis.email_sent == True,
+                ).limit(1)
+            )
+            _skip_email = _res.scalar_one_or_none() is not None
+    except Exception as _exc:
+        logger.warning("[%s] Could not check previous email_sent: %s", appointment_id, _exc)
+
+    # ── Create or reuse analysis record (visible in UI) ───────────────────────
+    if preexisting_analysis_id:
+        analysis_id = preexisting_analysis_id
+        try:
+            async with AsyncSessionLocal() as _sess:
+                async with _sess.begin():
+                    _ar = await _sess.get(Analysis, analysis_id)
+                    if _ar:
+                        _ar.processing_status = "processing"
+                        _ar.progress = 0
+                        _ar.step_message = "Rianalisi avviata..."
+                        _ar.pipeline_steps = {}
+                        _ar.report_json = None
+                        _ar.report_html = None
+                        _ar.qualification_level = None
+                        _ar.error_message = None
+                    else:
+                        analysis_id = await _create_processing_record(appointment_id, acuity_account)
+        except Exception as _exc:
+            logger.warning("[%s] Reset existing record failed: %s — creating new", appointment_id, _exc)
+            analysis_id = await _create_processing_record(appointment_id, acuity_account)
+    else:
+        analysis_id = await _create_processing_record(appointment_id, acuity_account)
+
     await init_steps(analysis_id)
 
     # Mark steps 1-3 as ok (they happened before pipeline was invoked)
@@ -780,6 +819,10 @@ async def _run_pipeline_inner(
 
     if _email_disabled:
         await update_step(analysis_id, 14, "ok", "Email disabilitata per questa campagna")
+        return
+
+    if _skip_email:
+        await update_step(analysis_id, 14, "ok", "Email già inviata in precedenza — skip rianalisi")
         return
 
     if qualification_level in ("non_in_target", "errore_tecnico"):

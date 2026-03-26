@@ -846,9 +846,10 @@ async def rianalizza_from_detail(
         run_analysis_pipeline,
         appointment_data=full_appointment,
         acuity_account=analysis.acuity_account,
+        preexisting_analysis_id=analysis_id,
     )
 
-    msg = quote("Rianalisi avviata. Aggiorna la pagina tra qualche minuto per il risultato aggiornato.")
+    msg = quote("Rianalisi avviata — la pagina si aggiornerà automaticamente.")
     return RedirectResponse(url=f"/admin/ui/analyses/{analysis_id}?ok={msg}", status_code=303)
 
 
