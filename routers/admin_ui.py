@@ -1154,7 +1154,14 @@ async def appointments_data(
 
         # Date group basato sulla data di PRESA (dateCreated), non data appuntamento
         _today_date = now.date()
-        _yest_date = (_today_date - timedelta(days=1))
+        # "Ieri" lavorativo: se oggi è lunedì → venerdì, se domenica → venerdì
+        _wd = _today_date.weekday()  # 0=lun, 6=dom
+        if _wd == 0:    # lunedì → ieri = venerdì
+            _yest_date = _today_date - timedelta(days=3)
+        elif _wd == 6:  # domenica → ieri = venerdì
+            _yest_date = _today_date - timedelta(days=2)
+        else:
+            _yest_date = _today_date - timedelta(days=1)
         try:
             if _created_date is None:
                 date_group = "other"
@@ -1202,7 +1209,14 @@ async def appointments_data(
     if _period != "all":
         from datetime import date as _date_cls, timedelta as _td
         _today = now.date()
-        _yest  = _today - timedelta(days=1)
+        # "Ieri" lavorativo: se oggi è lunedì → venerdì, se domenica → venerdì
+        _wd2 = _today.weekday()
+        if _wd2 == 0:
+            _yest = _today - timedelta(days=3)
+        elif _wd2 == 6:
+            _yest = _today - timedelta(days=2)
+        else:
+            _yest = _today - timedelta(days=1)
         _week_start = _today - timedelta(days=_today.weekday())   # Monday
         _month_start = _today.replace(day=1)
 

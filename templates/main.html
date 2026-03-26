@@ -25,12 +25,12 @@
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
 
   <div class="d-flex gap-1 align-items-center flex-wrap">
-    <button class="btn btn-sm period-btn"         data-period="today">Oggi</button>
-    <button class="btn btn-sm period-btn"         data-period="yesterday">Ieri</button>
-    <button class="btn btn-sm period-btn"         data-period="week">Sett.</button>
-    <button class="btn btn-sm period-btn active"  data-period="month">Mese</button>
-    <button class="btn btn-sm period-btn"         data-period="all">Tutti</button>
-    <button class="btn btn-sm period-btn"         data-period="custom">📅 Personalizzato</button>
+    <button class="btn btn-sm period-btn" data-period="today">Oggi</button>
+    <button class="btn btn-sm period-btn" data-period="yesterday">Ieri</button>
+    <button class="btn btn-sm period-btn" data-period="week">Sett.</button>
+    <button class="btn btn-sm period-btn" data-period="month">Mese</button>
+    <button class="btn btn-sm period-btn" data-period="all">Tutti</button>
+    <button class="btn btn-sm period-btn" data-period="custom">📅 Personalizzato</button>
     <span id="custom-range" class="d-none d-flex gap-1 align-items-center ms-1">
       <input type="date" id="date-from" class="form-control form-control-sm" style="width:130px; font-size:12px;">
       <span style="font-size:12px; color:#708090;">→</span>
@@ -95,7 +95,27 @@
 <script>
 var _pollTimer     = null;
 var _hasProcessing = false;
+var _LS_PERIOD     = 'callcoach_main_period';
 var _currentPeriod = 'month';
+
+/* ── "Ieri" lavorativo: lunedì → venerdì ─────────────────── */
+function _isBusinessYesterdayActive() {
+  /* Se oggi è lunedì (1) o domenica (0), il pulsante "Ieri" mostra venerdì */
+  return true; /* La logica è interamente nel backend — qui è solo UI */
+}
+
+/* ── Ripristina periodo da localStorage ──────────────────── */
+(function _restorePeriod() {
+  var saved = '';
+  try { saved = localStorage.getItem(_LS_PERIOD) || ''; } catch(e) {}
+  if (!saved) saved = 'month';
+  _currentPeriod = saved;
+  document.querySelectorAll('.period-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.period === saved);
+  });
+  var cr = document.getElementById('custom-range');
+  if (cr) cr.classList.toggle('d-none', saved !== 'custom');
+})();
 
 /* ── Period filter ──────────────────────────────────────── */
 document.querySelectorAll('.period-btn').forEach(function(btn) {
@@ -103,6 +123,7 @@ document.querySelectorAll('.period-btn').forEach(function(btn) {
     document.querySelectorAll('.period-btn').forEach(function(b){ b.classList.remove('active'); });
     btn.classList.add('active');
     _currentPeriod = btn.dataset.period;
+    try { localStorage.setItem(_LS_PERIOD, _currentPeriod); } catch(e) {}
     var cr = document.getElementById('custom-range');
     if (_currentPeriod === 'custom') {
       cr.classList.remove('d-none');
