@@ -4,7 +4,7 @@
 > Va letto all'inizio di ogni sessione per garantire continuità e non rimettere
 > in discussione decisioni già consolidate.
 >
-> Aggiornato: 2026-03-26
+> Aggiornato: 2026-03-27
 
 ---
 
@@ -37,19 +37,28 @@ Scatta il webhook Acuity → parte la pipeline di analisi in background (14 step
 - Le registrazioni Sidial **esistono già** quando l'appuntamento viene creato
 - NON cercare registrazioni in base alla data dell'appuntamento
 
-### A.2 Evento: analisi già esistente per lo stesso appuntamento
-Se arriva un secondo webhook per lo stesso `appointment_id`, viene creata una
-nuova analisi. Nella UI viene mostrata **solo la più recente** (ORDER BY id DESC).
+### A.2 Evento: rianalisi manuale dalla pagina di dettaglio
+Il pulsante "Rianalizza" **resetta e riusa il record esistente** (stesso `analysis_id`).
+La pagina di dettaglio rimane sullo stesso URL e vede tutti gli step aggiornarsi
+in tempo reale. NON viene creato un nuovo record.
+L'**email NON viene reinviata** se è già stata inviata in precedenza per lo stesso
+`appointment_id` (controllo su `email_sent=True` in qualunque record precedente).
 
-### A.3 Evento: registrazioni in conversione (wav→mp3)
-Solo per appuntamenti **di oggi**: retry automatico 5 volte × 3 minuti di attesa.
-Per appuntamenti passati: nessun retry, le registrazioni sono già convertite.
+### A.3 Evento: webhook per appuntamento già analizzato (stesso appointment_id)
+Se il webhook arriva da zero (non dalla UI), viene comunque creato un nuovo record.
+Nella UI viene mostrata **solo la più recente** (ORDER BY id DESC).
 
-### A.4 Evento: motore di trascrizione che fallisce
+### A.4 Evento: registrazioni in conversione (wav→mp3)
+Solo per appuntamenti **di oggi**: lo stato `pending_conversion` viene impostato,
+poi un **background loop** (ogni 10 minuti, max 6 tentativi = ~60 min) riprova
+automaticamente il download. Dopo 6 tentativi → `errore_tecnico`.
+Per appuntamenti passati: nessun retry (le registrazioni devono già essere pronte).
+
+### A.5 Evento: motore di trascrizione che fallisce
 Fallback automatico: se AssemblyAI fallisce → tenta con OpenAI Whisper (e viceversa).
 Se il fallback funziona, diventa il motore attivo per quella sessione.
 
-### A.5 Evento: analisi in elaborazione nella UI
+### A.6 Evento: analisi in elaborazione nella UI
 - Pallino verde pulsante animato visibile sulla riga
 - Timer mm:ss aggiornato ogni secondo
 - Polling automatico ogni 2 secondi per aggiornare lo stato
@@ -185,12 +194,25 @@ errore_tecnico     → badge nero
 
 ### C.6 Timeout e deadline
 ```
-Timeout singola chiamata HTTP Sidial:  12 secondi
-Deadline globale Sidial:              180 secondi
-Timeout outer webhook:                200 secondi  (> deadline Sidial)
-Timeout progress callback:              3 secondi
+Timeout singola chiamata HTTP Sidial:  12 secondi  (hard via Future.result)
+Deadline interna thread Sidial:        90 secondi  (loop interno con time.monotonic)
+Timeout asyncio.wait_for (wrapper):   120 secondi  (hard cap sulla pipeline)
+Timeout retry_conversion_analysis:    200 secondi
 ```
-Regola: ogni timeout esterno deve essere > del timeout/deadline interno.
+**Regola:** ogni timeout esterno deve essere > del timeout/deadline interno.
+
+**Architettura timeout Sidial (critica):**
+- `httpx.Timeout(read=10s)` è per-chunk TCP, NON totale → non affidabile da solo
+- Ogni chiamata HTTP è avvolta in `_HTTP_POOL.submit(_do).result(timeout=12)` → hard cap 12s
+- Il thread gira in `_EXECUTOR` (max 4 worker dedicati) con deadline interna 90s
+- L'outer `asyncio.wait_for(run_in_executor(...), timeout=120)` garantisce che
+  la pipeline non aspetti mai più di 120s, anche se il thread è zombie
+
+### C.7 Campo `converted` nelle registrazioni Sidial
+Il campo `converted` può assumere valori diversi da "y"/"n" (es. null, 1, "1", "true").
+**Regola:** se `converted` è assente o null → assumere pronta (tenta il download).
+Solo se esplicitamente "n", "no", "false", "0" → considerare in conversione.
+Il download stesso verifica se il file è effettivamente disponibile.
 
 ---
 
@@ -390,8 +412,9 @@ Health:   https://web-production-181160.up.railway.app/health
 ⚠️ NON usare `callcoach-ai-production.up.railway.app` — è un'altra applicazione.
 
 ### F.3 Versioning pipeline
-La versione è visibile nello step 1 del webhook: `v2024-03-24g`.
+La versione è visibile nello step 1 del webhook: `v2026-03-26b`.
 Formato: data + lettera progressiva. Utile per verificare i deploy.
+Bump ad ogni deploy significativo.
 
 ### F.4 Trascrizione — parametro AssemblyAI corretto
 ```python
@@ -449,17 +472,81 @@ indipendentemente dalla campagna. Contengono le regole meta-logica
 8. **NON penalizzare la qualifica del prospect** per lacune dell'operatore
 9. **NON escludere per ADR** se il prospect spedisce anche merce non-ADR
 10. **Il periodo default** nella pagina principale è "Mese", non "Oggi"
+11. **NON reinviare l'email** se già inviata per lo stesso `appointment_id`
+12. **NON creare un nuovo record** su rianalisi manuale — resettare e riusare lo stesso
+13. **NON filtrare per `converted=="y"`** — usare logica invertita (solo "n/no/false/0" = in conv.)
+14. **NON fidarsi di `httpx.Timeout(read=X)`** da solo — usare `Future.result(timeout=X)` per hard cap
 
 ---
 
 ## I. LAVORI IN CORSO / TODO
 
+### Completati in questa sessione (2026-03-27)
+- [x] Sidial hang definitivamente risolto: `_find_all_sync()` in `ThreadPoolExecutor` dedicato
+      + `Future.result(timeout=12)` per ogni HTTP call + `asyncio.wait_for(timeout=120)`
+- [x] Campo `converted` corretto: logica invertita (null/assente = pronto, solo "n/no/false/0" = in conv.)
+- [x] Rianalisi manuale: reusa stesso record (`preexisting_analysis_id`), steps si aggiornano live
+- [x] Email non reinviata su rianalisi manuale (check `email_sent=True` su record precedenti)
+- [x] `pending_conversion`: background retry loop ogni 10 min, max 6 tentativi
+- [x] "Ieri lavorativo": lunedì/domenica → venerdì, su tutte le pagine
+- [x] Periodo UI persistente in `localStorage` (chiave: `callcoach_main_period`)
+
+### Da fare
+- [ ] **ARCHITETTURA SIDIAL CACHE** — vedere sezione J
 - [ ] Creare Documento Globale AI con regole logica OR/AND nella UI (`/admin/ui/global`)
 - [ ] Ristrutturare "Parametri di qualificazione" di INTER con le categorie standard
+- [ ] Gestione dichiarazioni future nel prompt AI (qualifica OK ma con flag "valori futuri")
+- [ ] Gestione risposta negativa esplicita (≠ "parametro non chiesto")
 - [ ] Meccanismo feedback/correzione analisi — pulsante "analisi errata" nella UI
-- [ ] Uniformare colori etichette su tutte le pagine
 - [ ] Pulsanti di reinvio email per analisi completate
 - [ ] Risolvere problema crediti Anthropic (dopo ricarica $40 ancora errore billing)
+
+---
+
+## J. ⚠️ CHECKPOINT ARCHITETTURALE — 2026-03-27
+
+> **PUNTO DI RITORNO:** Se qualcosa va storto con i lavori successivi (Sidial cache,
+> refactoring pipeline, ecc.), tornare a questo checkpoint. Il sistema in questo stato
+> è funzionante con le fix della sessione del 27/03/2026.
+>
+> **Commit di riferimento:** `330c7c5` — "Fix re-analysis: reuse record ID, skip duplicate email, new sidial sync engine"
+> **Pipeline version:** `v2026-03-26b`
+
+### Stato sistema al checkpoint
+```
+✅ Sidial search: funziona (thread sincrono dedicato + hard timeout)
+✅ Rianalisi manuale: reusa record, steps aggiornati, no email duplicata
+✅ pending_conversion: retry automatico ogni 10 min (max 60 min)
+✅ Trascrizione: fallback automatico Whisper ↔ AssemblyAI
+✅ UI: periodo persistente, ieri lavorativo, badge pending_conversion
+⚠️  Ancora da verificare: Sidial a volte lento (>120s timeout scatta)
+⚠️  Da implementare: Sidial cache locale (architettura sezione J.1)
+```
+
+### J.1 Architettura Sidial Cache — decisione da prendere
+
+**Problema:** Con 1000+ chiamate/giorno, Sidial può essere lento o irraggiungibile
+nel momento esatto in cui arriva il webhook. Le registrazioni potrebbero non essere
+ancora convertite.
+
+**Soluzione proposta (da implementare):**
+```
+SIDIAL ──(sync ogni 5 min)──→ sidial_recordings_cache (PostgreSQL/Supabase)
+                                       ↑
+                              scarica solo rec convertite > 30s
+                                       │
+ACUITY webhook ──(delay 5 min)──→ pipeline legge dalla cache
+                                  (0 chiamate live a Sidial)
+```
+
+**Nodo critico da testare prima di implementare:**
+Sidial supporta `searchRecs` con filtro `createdWhen >= data`?
+```json
+[{"table": "leadsRecs", "field": "createdWhen", "operator": ">=", "value": "2026-03-27"}]
+```
+Se sì → sync efficiente. Se no → sync deve passare per ogni lead attivo (più lento).
+
+**Costi storage:** ~100-300 MB/giorno (registrazioni > 30s) → ~$1-3/mese Supabase.
 
 ---
 
