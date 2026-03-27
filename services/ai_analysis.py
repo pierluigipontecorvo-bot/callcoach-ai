@@ -147,15 +147,29 @@ def build_analysis_prompt(
             '      ✅ Esempio: lista accettata = [GLS, DHL, UPS]. Prospect usa GLS e Fama.\n'
             '         → GLS è nella lista → parametro SODDISFATTO. Fama è irrilevante.\n'
             '      ❌ NON segnalare come fuori parametro perché il prospect usa anche vettori non in lista.\n\n'
-            '   c) PARAMETRI NON RACCOLTI (operatore non ha chiesto o prospect non ha risposto con certezza):\n'
+            '   c) PARAMETRI NON RACCOLTI (operatore non ha chiesto E prospect non ha dato risposta):\n'
             '      Inserisci il parametro in "parametri_mancanti" MA NON impostare "fuori_parametro": true.\n'
             '      Un parametro non raccolto è un PROBLEMA DI QUALITÀ DELLA CHIAMATA, non significa che\n'
             '      il prospect sia fuori target. Imposta "fuori_parametro": false.\n'
             '      ⚠️ IMPORTANTE sulla risposta "non lo so": se il prospect inizialmente risponde\n'
             '      "non lo so" o "non ricordo" ma poi nel corso della stessa chiamata o di una successiva\n'
-            '      fornisce una cifra o una conferma, usa la RISPOSTA FINALE confermata, non la prima.\n\n'
-            '   d) PARAMETRI RICHIESTI E DICHIARATI FUORI SOGLIA: se il prospect ha CONFERMATO un valore\n'
-            '      che NON rispetta la soglia richiesta → fuori target → "fuori_parametro": true.\n'
+            '      fornisce una cifra o una conferma, usa la RISPOSTA FINALE confermata, non la prima.\n'
+            '      ⚠️ DISTINZIONE CRITICA: "parametro non raccolto" (→ parametri_mancanti) è SOLO quando\n'
+            '      l\'operatore non ha mai chiesto E il prospect non ha mai risposto. Se il prospect ha\n'
+            '      risposto con certezza — anche negativamente — NON è "non raccolto": vai alla regola d).\n\n'
+            '   d) PARAMETRI RICHIESTI E CONFERMATI FUORI SOGLIA (incluse negazioni esplicite):\n'
+            '      Se il prospect ha CONFERMATO un valore che NON rispetta la soglia richiesta → "fuori_parametro": true.\n'
+            '      ⚠️ REGOLA FONDAMENTALE — RISPOSTA NEGATIVA ESPLICITA:\n'
+            '      Se il prospect dichiara di NON avere / NON fare / NON spendere qualcosa richiesto\n'
+            '      (es. "non spedisco all\'estero", "non abbiamo dipendenti", "non usiamo vettori"),\n'
+            '      questo conta come VALORE CONFERMATO = 0 / "nessuno" → il parametro è VERIFICATO\n'
+            '      (va in "parametri_verificati" con il valore dichiarato), NON in "parametri_mancanti".\n'
+            '      Se quel valore (0 / "nessuno") non rispetta la soglia → "fuori_parametro": true.\n'
+            '      ✅ Esempio: parametro "spedizioni internazionali richieste". Prospect: "No, non spediamo\n'
+            '         all\'estero" → parametri_verificati: ["Spedizioni internazionali: 0 (prospect ha\n'
+            '         dichiarato di non spedire all\'estero)"] → fuori_parametro: true.\n'
+            '      ❌ SBAGLIATO: mettere "Spedizioni internazionali" in parametri_mancanti — NON è un\n'
+            '         parametro mancante, è stato chiesto e la risposta è stata chiara e negativa.\n'
             '      - ⚠️ TOLLERANZA 10% — si applica SOLO a parametri monetari (budget, spesa, fatturato):\n'
             '        Es. soglia minima 12.000€/anno → accettabile ≥ 10.800€/anno (≈ 900€/mese).\n'
             '      - ❌ La tolleranza NON si applica a parametri non monetari (n° dipendenti, peso, ecc.).\n\n'
@@ -293,10 +307,10 @@ Per completare l'analisi, utilizza le informazioni secondo questa priorità:
     "fuori_parametro": false,
     "spiegazione": "Spiegazione sintetica in circa 30 parole del perché di questo rating. Se fuori_parametro=true, indica esplicitamente quale soglia minima non è stata raggiunta.",
     "parametri_verificati": [
-      "Nome parametro: valore raccolto nella chiamata"
+      "Nome parametro: valore dichiarato dal prospect (anche se negativo/fuori soglia)"
     ],
     "parametri_mancanti": [
-      "Nome parametro non richiesto durante la chiamata"
+      "Nome parametro — mai chiesto dall'operatore e mai risposto dal prospect"
     ]
   }},
 
