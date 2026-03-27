@@ -310,11 +310,27 @@ def _find_all_sync(
             return 0
 
     def _converted(rec: dict) -> bool:
-        return str(rec.get("converted") or "n").lower() == "y"
+        """
+        True se la registrazione è pronta per il download.
+        NOTA: Sidial può non restituire il campo 'converted', o restituire valori
+        diversi da "y" (es. null, 1, "1", "true"). Per questo:
+        - Se il campo è assente o None → assume pronta (tenta il download)
+        - Solo se esplicitamente "n", "no", "false", "0" → considera in conversione
+        Il download stesso gestisce i casi in cui il file non è ancora pronto.
+        """
+        v = rec.get("converted")
+        if v is None:
+            return True  # campo assente → tenta il download
+        sv = str(v).strip().lower()
+        return sv not in ("n", "no", "false", "0")
 
     # Conta statistiche PRIMA del filtraggio
     total_recs_count = len(all_recs)
     converting_count = sum(1 for r in all_recs if not _converted(r))
+
+    # Log valori unici del campo converted per diagnostica
+    _conv_values = list({str(r.get("converted")) for r in all_recs})
+    logger.info("Sidial: campo 'converted' — valori unici: %s", _conv_values)
 
     # Recenti
     recent = [r for r in all_recs
@@ -322,9 +338,9 @@ def _find_all_sync(
 
     candidates = recent if recent else all_recs[:5]
 
-    # Converted e durata sufficiente
+    # Durata sufficiente — NON filtra per converted (il download decide se il file è pronto)
     useful = sorted(
-        [r for r in candidates if _converted(r) and _dur(r) >= min_call_seconds],
+        [r for r in candidates if _dur(r) >= min_call_seconds],
         key=_dur, reverse=True,
     )[:max_recs]
 
