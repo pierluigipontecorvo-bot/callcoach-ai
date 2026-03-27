@@ -20,7 +20,7 @@ import json
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
@@ -33,12 +33,20 @@ logger = logging.getLogger(__name__)
 _BASE  = settings.sidial_api_url.rstrip("/")
 _TOKEN = settings.sidial_api_token
 
-# Executor DEDICATO — max 4 thread contemporanei (4 analisi parallele)
-# Separato dal ThreadPoolExecutor di sistema → nessuna contesa
+# Executor DEDICATO per le analisi (max 4 parallele)
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sidial")
 
-# Deadline interna del thread (secondi) — INDIPENDENTE da asyncio
-_THREAD_DEADLINE = 120   # 2 minuti max per l'intero thread
+# Pool HTTP separato — ogni singola chiamata HTTP gira qui con timeout HARD
+# Questo garantisce che httpx non si blocchi mai oltre _HTTP_TIMEOUT secondi,
+# indipendentemente dal comportamento del server (chunked, slow response, ecc.)
+_HTTP_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="sidial_http")
+
+# Timeout HARD per singola chiamata HTTP (secondi) — via Future.result(timeout=X)
+# Completamente indipendente da httpx.Timeout che è solo per-chunk TCP
+_HTTP_TIMEOUT = 12
+
+# Deadline interna del thread di analisi (secondi)
+_THREAD_DEADLINE = 90   # 90s per l'intero thread (< asyncio.wait_for timeout)
 
 # Campi telefono Sidial
 _PHONE_FIELDS = ("phone1", "phone2", "phone3", "phone4")
@@ -103,11 +111,14 @@ def _find_all_sync(
     def _post(data: dict) -> Optional[httpx.Response]:
         if time.monotonic() > deadline:
             return None
-        try:
+        def _do():
             with httpx.Client(timeout=_TO) as c:
                 return c.post(_BASE, data=data)
-        except httpx.TimeoutException:
-            logger.warning("Sidial POST timeout: a=%s", data.get("a"))
+        try:
+            fut = _HTTP_POOL.submit(_do)
+            return fut.result(timeout=_HTTP_TIMEOUT)
+        except FutureTimeoutError:
+            logger.warning("Sidial POST hard-timeout (%ds): a=%s", _HTTP_TIMEOUT, data.get("a"))
             return None
         except Exception as exc:
             logger.warning("Sidial POST error: %s", exc)
@@ -116,11 +127,14 @@ def _find_all_sync(
     def _get_url(url: str) -> Optional[httpx.Response]:
         if time.monotonic() > deadline:
             return None
-        try:
+        def _do():
             with httpx.Client(timeout=_DL, follow_redirects=True) as c:
                 return c.get(url)
-        except httpx.TimeoutException:
-            logger.warning("Sidial GET timeout: %s", url[:80])
+        try:
+            fut = _HTTP_POOL.submit(_do)
+            return fut.result(timeout=_HTTP_TIMEOUT)
+        except FutureTimeoutError:
+            logger.warning("Sidial GET hard-timeout (%ds): %s", _HTTP_TIMEOUT, url[:80])
             return None
         except Exception as exc:
             logger.warning("Sidial GET error: %s", exc)
@@ -443,7 +457,23 @@ async def find_and_download_all_recordings(
 
     try:
         loop = asyncio.get_running_loop()
-        recordings, stats = await loop.run_in_executor(_EXECUTOR, fn)
+        # asyncio.wait_for garantisce che la pipeline non aspetti mai più di 120s
+        # anche se il thread httpx si blocca a livello TCP/SSL.
+        # Il thread continua in background (non killabile), ma la pipeline va avanti.
+        recordings, stats = await asyncio.wait_for(
+            loop.run_in_executor(_EXECUTOR, fn),
+            timeout=120,
+        )
+    except asyncio.TimeoutError:
+        elapsed = 120
+        logger.error("Sidial: asyncio.wait_for timeout dopo %ds — pipeline continua senza registrazioni", elapsed)
+        _empty = {
+            "leads_found": 0, "total_recs": 0, "recent_recs": 0,
+            "converting_recs": 0, "total_seconds": 0,
+            "search_method": f"timeout:{elapsed}s",
+            "phone_variants": _phone_variants(phone),
+        }
+        return ([], _empty) if return_stats else []
     except Exception as exc:
         logger.error("Sidial: thread error: %s", exc, exc_info=True)
         _empty = {

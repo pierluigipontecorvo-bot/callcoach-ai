@@ -25,7 +25,7 @@ import time as _time_mod
 from urllib.parse import parse_qs
 
 # Versione pipeline — visibile nello step 1 per verificare deploy
-_PIPELINE_VERSION = "v2026-03-27a"
+_PIPELINE_VERSION = "v2026-03-27b"
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -452,8 +452,6 @@ async def _run_pipeline_inner(
 
     _sidial_start = _time_mod.monotonic()
     try:
-        # NO asyncio.wait_for: sidial.py gestisce internamente il deadline (180s)
-        # con timeout httpx nativi. asyncio.wait_for causa hang su aclose() httpx.
         recordings, sidial_stats = await find_and_download_all_recordings(
             phone=phone,
             campaign_code=campaign_info.get("raw"),
@@ -483,13 +481,22 @@ async def _run_pipeline_inner(
     )
 
     if sidial_stats["leads_found"] == 0:
-        _variants = sidial_stats.get("phone_variants", [])
-        msg_no_lead = (
-            f"Nessun lead trovato su Sidial — "
-            f"tel: {phone} · varianti provate: {_variants} · "
-            f"piva: {piva or '—'} · rs: {ragione_sociale or '—'}"
-        )
-        await update_step(analysis_id, 9, "stop", msg_no_lead)
+        _method = sidial_stats.get("search_method", "")
+        if "timeout" in _method:
+            msg_no_lead = (
+                f"Sidial non ha risposto entro 120s — "
+                f"tel: {phone} · piva: {piva or '—'} · rs: {ragione_sociale or '—'} "
+                f"(rianalizza tra qualche minuto)"
+            )
+            await update_step(analysis_id, 9, "stop", msg_no_lead)
+        else:
+            _variants = sidial_stats.get("phone_variants", [])
+            msg_no_lead = (
+                f"Nessun lead trovato su Sidial — "
+                f"tel: {phone} · varianti provate: {_variants} · "
+                f"piva: {piva or '—'} · rs: {ragione_sociale or '—'}"
+            )
+            await update_step(analysis_id, 9, "stop", msg_no_lead)
         await _save_error(analysis_id, appointment_id, msg_no_lead, acuity_account)
         return
     elif sidial_stats.get("search_params_used", 3) < 2:
