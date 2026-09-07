@@ -19,9 +19,12 @@
 ## Architettura
 
 - **Backend**: FastAPI + Jinja2 + Starlette, deploy su Railway
-- **Database**: PostgreSQL su Supabase (con PgBouncer/Supavisor in Transaction Mode)
-  - CRITICO: asyncpg deve usare `statement_cache_size=0` per compatibilita PgBouncer
-  - CRITICO: `pool_pre_ping=False` per evitare problemi con PgBouncer
+- **Database**: PostgreSQL su Supabase, pooler sulla porta 5432 (session mode —
+  verificato 07/09/2026; la nota precedente diceva transaction mode ed era sbagliata)
+  - CRITICO: asyncpg deve usare `statement_cache_size=0`
+  - CRITICO: `pool_pre_ping=False`
+  - Nessun sistema di migrazioni: lo schema si costruisce con DDL idempotenti a ogni avvio.
+    `schema.sql` è fermo alla prima versione e NON descrive il DB reale.
 - **Acuity Scheduling**: 2 account (account 1 e 2), webhook su etichetta "PRESO"
 - **Sidial CRM**: API REST per cercare lead e scaricare registrazioni
   - Ricerca per: telefono (phone1-4), ragione sociale, P.IVA
@@ -91,7 +94,14 @@ errore_tecnico     (nero)   — trascrizione troppo breve/fallita
 - `run_analysis_pipeline()` ha un global try/except wrapper
 - Il periodo default nella pagina principale e "Mese" (non "Oggi")
 - Le analisi duplicate per lo stesso appointment vengono gestite mostrando solo la piu recente (ORDER BY id DESC)
-- Sidial retry: 5 tentativi × 3 minuti per registrazioni in conversione (solo appuntamenti di oggi)
+- Sidial retry registrazioni in conversione: 6 tentativi ogni 10 minuti (valori scritti
+  nel codice; le impostazioni `sidial_retry_count`/`sidial_retry_wait_seconds` sono lette
+  e mai usate). ATTENZIONE: al 07/09/2026 `retry_conversion_analysis` è ROTTA — usa nomi
+  non importati nel modulo e solleva NameError a ogni giro, quindi le analisi in
+  `pending_conversion` non ripartono mai. Dettaglio in CONTESTO_CALLCOACH.md §5.1.
+- Il webhook analizza SOLO appuntamenti creati oggi e SOLO con etichetta PRESO
+- Registrazioni: da oggi si trovano sulla REPLICA MariaDB Sidial (non più cercando via API);
+  il download del file resta su `a=getLeadRec`. Procedura completa in CONTESTO_CALLCOACH.md §3.
 
 ## Accesso admin: dov'è la password e come si recupera
 
