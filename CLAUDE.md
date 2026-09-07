@@ -1,5 +1,11 @@
 # CallCoach AI — Contesto Progetto
 
+> **Prima di lavorare, leggi `CONTESTO_CALLCOACH.md`** (nella cartella del progetto).
+> È il dossier completo e autonomo su CallCoach e l'analisi delle telefonate:
+> come si recuperano le registrazioni dalla replica MariaDB Sidial, la pipeline,
+> le regole di dominio, i difetti verificati. Aggiornato e verificato in
+> produzione il 07/09/2026. Questo file qui sotto resta il promemoria breve.
+
 ## Flusso Business (NON DIMENTICARE MAI)
 
 1. L'**operatore** (es. 91-ROSAMARIA) chiama il cliente per vendere un servizio
