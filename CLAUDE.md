@@ -92,3 +92,26 @@ errore_tecnico     (nero)   — trascrizione troppo breve/fallita
 - Il periodo default nella pagina principale e "Mese" (non "Oggi")
 - Le analisi duplicate per lo stesso appointment vengono gestite mostrando solo la piu recente (ORDER BY id DESC)
 - Sidial retry: 5 tentativi × 3 minuti per registrazioni in conversione (solo appuntamenti di oggi)
+
+## Accesso admin: dov'è la password e come si recupera
+
+L'area admin (`/admin/ui/login`) ha **una sola password condivisa**, senza
+utenti né email: sta nella variabile d'ambiente `ADMIN_PASSWORD` del servizio
+Railway `CALLCOACH` (progetto EFFONCALL-CALLCOACH) e viene confrontata in
+chiaro in `utils/auth.py` → `verify_admin_password`. Il login rilascia un JWT
+di 24 ore in un cookie HttpOnly `callcoach_token`, firmato con `SECRET_KEY`.
+
+Non esiste (per scelta) un «password dimenticata» via email: **la password si
+legge o si cambia da Railway**.
+
+```bash
+# leggerla
+railway variables --service CALLCOACH | grep ADMIN_PASSWORD
+
+# cambiarla (il servizio si riavvia da solo; i cookie già emessi restano
+# validi fino a scadenza, per invalidarli subito cambia anche SECRET_KEY)
+railway variables --service CALLCOACH --set 'ADMIN_PASSWORD=<nuova>'
+```
+
+In alternativa: Railway → progetto EFFONCALL-CALLCOACH → servizio CALLCOACH →
+scheda *Variables*. La password **non va mai scritta nel repo**.
