@@ -45,8 +45,8 @@ Numeri letti dal database di produzione il 7 settembre 2026.
 |---|---|
 | Analisi in archivio | 406 |
 | Completate | 326 |
-| In errore | 50 |
-| Ferme in attesa di conversione | 30 |
+| In errore | 50 → **80** il 22/09/2026 |
+| Ferme in attesa di conversione | 30 → **0** il 22/09/2026 (vedi 5.1) |
 | Ultima analisi | 4 settembre 2026 |
 | Campagne configurate | 8 |
 
@@ -363,33 +363,36 @@ API):
   salvataggio, email a operatrice + destinatari di campagna + inoltro). Lo
   stesso collaudo sul codice precedente riproduce il difetto.
 
-**Non verificato:** il comportamento in produzione dopo il deploy, cioè che le
-analisi ferme ripartano davvero e con quale esito.
+**Verificato in produzione il 22 settembre 2026**, deploy `0c7312f`: il loop è
+partito 30 secondi dopo l'avvio (`Retry conversion: 30 analisi pending`) e nei
+log non compare più nessun `name ... is not defined`.
 
 **Regola nata da qui:** in `routers/webhook.py` i nomi di DB e servizi sono
 importati dentro ogni funzione, non a livello di modulo. Ogni funzione nuova
 importa i suoi, e prima di ogni commit `python3 -m pyflakes routers/webhook.py`
 deve dare zero «undefined name».
 
-**Attenzione al primo deploy con la correzione.** Il loop parte 30 secondi
-dopo l'avvio e ripesca **tutte** le analisi in `pending_conversion`, una dopo
-l'altra, nel processo unico del server (vedi 5.2). Per ciascuna: fino a 200 s
-di ricerca registrazioni; se le trova, trascrizione, analisi con Claude e —
-salvo `non_in_target`/`errore_tecnico` o campagna con email disattivata —
-**email all'operatrice, ai destinatari della campagna e a inoltro@**, su
-chiamate vecchie anche di settimane. Chi mette in linea decide **prima** cosa
-fare delle 30 ferme:
+**Che cosa è stato fatto delle 30 ferme.** Erano tutte a `_conv_retry = 0`,
+create fra il 26 marzo e il 3 giugno 2026, su 16 campagne e 7 operatrici. Al
+primo deploy della correzione sarebbero ripartite tutte insieme, una dopo
+l'altra nel processo unico del server (vedi 5.2), e quelle con registrazioni
+ancora reperibili avrebbero mandato **email alle operatrici, ai destinatari di
+campagna e a inoltro@** su chiamate vecchie di mesi. Scelta presa il 22
+settembre: **chiuderle prima del deploy**, portando il contatore al massimo
+(`pipeline_steps._conv_retry = 6` sulle righe in `pending_conversion`, un
+semplice UPDATE, nessuna cancellazione). Esito al primo giro, verificato:
+tutte e 30 chiuse in stato `error` con «Registrazioni non disponibili dopo 6
+tentativi automatici (~60 min)», passo 10 in `stop`, **zero email inviate**.
+Il conto delle analisi in errore passa quindi da 50 a 80, e `pending_conversion`
+resta vuoto (vedi capitolo 2).
 
-- lasciarle ripartire così come sono (costo di trascrizione e analisi, email
-  su chiamate vecchie);
-- oppure chiuderle senza analizzarle, portando il contatore al massimo prima
-  del deploy (`pipeline_steps._conv_retry = 6` sulle righe in
-  `pending_conversion`): al primo giro si chiudono con «Registrazioni non
-  disponibili dopo 6 tentativi», stato `error`, e chi vuole le rifà una per
-  una dalla pagina di dettaglio («Rianalizza», che riusa lo stesso record).
-  Il passo 10 scrive anche i flag `can_upload_audio`/`can_upload_transcript`,
-  ma nessuna pagina li legge: non esiste un caricamento manuale di audio o
-  trascrizione.
+Chi volesse recuperarne una la rifà dalla pagina di dettaglio col pulsante
+**Rianalizza**, che riusa lo stesso record. Il passo 10 scrive anche i flag
+`can_upload_audio`/`can_upload_transcript`, ma nessuna pagina li legge: un
+caricamento manuale di audio o trascrizione non esiste.
+
+**Da qui in avanti** il ritentativo funziona per le analisi nuove: 6 giri da
+10 minuti, poi chiusura in errore.
 
 ### 5.2 L'analisi blocca tutto il server
 
