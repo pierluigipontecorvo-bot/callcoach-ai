@@ -8,6 +8,7 @@
 > Aggiornato: **7 settembre 2026**. Tutti i numeri e le procedure qui dentro sono
 > stati verificati in produzione quel giorno, non ricostruiti a memoria.
 > Dove una cosa non è stata verificata, è scritto.
+> Il paragrafo 5.1 è stato aggiornato il **22 settembre 2026** (difetto corretto).
 
 ---
 
@@ -315,8 +316,8 @@ Regole di robustezza già imparate a caro prezzo, da mantenere:
   fallisce, la pipeline prosegue;
 - i salvataggi intermedi sono tutti protetti;
 - se le registrazioni risultano ancora in conversione, si riprova ogni 10 minuti
-  per un massimo di 6 volte, poi si chiude con errore tecnico (**oggi questo
-  ritentativo non funziona: vedi capitolo 5**);
+  per un massimo di 6 volte, poi si chiude con errore tecnico (questo
+  ritentativo non ha funzionato fino al 22 settembre 2026: vedi 5.1);
 - la rianalisi manuale **riusa lo stesso record**, non ne crea uno nuovo, e
   **non rimanda l'email** se era già stata inviata.
 
@@ -327,24 +328,68 @@ Regole di robustezza già imparate a caro prezzo, da mantenere:
 Non sono sospetti: sono stati riprodotti sul codice o letti nei log di
 produzione. Chi riscrive deve saperli, chi tocca il programma attuale anche.
 
-### 5.1 Il ritentativo delle registrazioni in conversione non funziona
+### 5.1 Il ritentativo delle registrazioni in conversione non funzionava (corretto il 22 settembre 2026)
 
-`retry_conversion_analysis` usa cinque nomi che nel suo file non esistono
-(`AsyncSessionLocal`, `Analysis`, `update_step`, `get_setting`, `_INOLTRO`):
-sono importati dentro **altre** funzioni, non a livello di modulo. La funzione
-fallisce quindi alla prima riga utile, a ogni giro, per ogni analisi.
+**Corretto il 22 settembre 2026.** `retry_conversion_analysis` ora importa
+dentro di sé i quattro nomi che le mancavano (`AsyncSessionLocal`, `Analysis`,
+`update_step`, `get_setting`), e `_INOLTRO` è diventata una costante di modulo
+condivisa con la pipeline principale, invece di un letterale locale di quella
+sola funzione. Nient'altro è cambiato nel corpo della funzione.
 
-Nei log di produzione, ogni dieci minuti:
+**Com'era.** Usava cinque nomi che nel suo file non esistevano, perché
+importati dentro **altre** funzioni, non a livello di modulo. Il `NameError`
+non arrivava nemmeno al loop di `main.py`: lo inghiottiva il primo `try/except`
+della funzione, che ritornava `True` («completata»), e il loop passava oltre
+senza segnalare niente. Nei log di produzione, ogni dieci minuti:
 
 ```
 ERROR | routers.webhook | [retry_conv] Load analysis 317 failed: name 'AsyncSessionLocal' is not defined
 ```
 
-**Conseguenza:** le **30 analisi ferme in `pending_conversion` non riparteranno
-mai**, e il contatore dei tentativi non avanza, quindi non arrivano nemmeno a
-chiudersi con un errore. Restano lì. Si sblocca aggiungendo gli import mancanti
-dentro la funzione, oppure — meglio — sparisce da sola con la replica, perché lo
-stato di conversione lì è certo.
+Conseguenza, fino alla correzione: le **30 analisi ferme in `pending_conversion`
+non ripartivano mai**, e il contatore dei tentativi non avanzava, quindi non
+arrivavano nemmeno a chiudersi con un errore. Restavano lì.
+
+**Com'è stato verificato** (22/09/2026, in locale, senza database né chiamate
+API):
+
+- `pyflakes` sul file: zero «undefined name» (restano solo le due variabili
+  inutilizzate `retry_count`/`retry_wait`, che sono il difetto 5.3);
+- `import routers.webhook` va a buon fine;
+- collaudo a runtime della funzione con sessione ORM e servizi simulati sui
+  quattro percorsi: analisi non più pendente (esce subito); ancora in
+  conversione (torna `pending_conversion` col contatore a 1); settimo tentativo
+  (chiusura in errore); registrazioni trovate (trascrizione, analisi,
+  salvataggio, email a operatrice + destinatari di campagna + inoltro). Lo
+  stesso collaudo sul codice precedente riproduce il difetto.
+
+**Non verificato:** il comportamento in produzione dopo il deploy, cioè che le
+analisi ferme ripartano davvero e con quale esito.
+
+**Regola nata da qui:** in `routers/webhook.py` i nomi di DB e servizi sono
+importati dentro ogni funzione, non a livello di modulo. Ogni funzione nuova
+importa i suoi, e prima di ogni commit `python3 -m pyflakes routers/webhook.py`
+deve dare zero «undefined name».
+
+**Attenzione al primo deploy con la correzione.** Il loop parte 30 secondi
+dopo l'avvio e ripesca **tutte** le analisi in `pending_conversion`, una dopo
+l'altra, nel processo unico del server (vedi 5.2). Per ciascuna: fino a 200 s
+di ricerca registrazioni; se le trova, trascrizione, analisi con Claude e —
+salvo `non_in_target`/`errore_tecnico` o campagna con email disattivata —
+**email all'operatrice, ai destinatari della campagna e a inoltro@**, su
+chiamate vecchie anche di settimane. Chi mette in linea decide **prima** cosa
+fare delle 30 ferme:
+
+- lasciarle ripartire così come sono (costo di trascrizione e analisi, email
+  su chiamate vecchie);
+- oppure chiuderle senza analizzarle, portando il contatore al massimo prima
+  del deploy (`pipeline_steps._conv_retry = 6` sulle righe in
+  `pending_conversion`): al primo giro si chiudono con «Registrazioni non
+  disponibili dopo 6 tentativi», stato `error`, e chi vuole le rifà una per
+  una dalla pagina di dettaglio («Rianalizza», che riusa lo stesso record).
+  Il passo 10 scrive anche i flag `can_upload_audio`/`can_upload_transcript`,
+  ma nessuna pagina li legge: non esiste un caricamento manuale di audio o
+  trascrizione.
 
 ### 5.2 L'analisi blocca tutto il server
 
@@ -588,9 +633,10 @@ Cosa cambiare, in ordine di guadagno:
    whitelist l'IP `208.77.244.155`.
 2. **Semplificare i timeout.** I tre livelli in cascata esistono per difendersi
    dalla lentezza dell'API. Con una query da mezzo secondo diventano inutili.
-3. **Sbloccare le trenta analisi ferme.** Oggi il ritentativo è rotto (5.1) e
-   non ripartiranno mai da sole. Con `sidial_call_id` che punta a `leadsRecs.id`
-   si possono ripescare e rifare.
+3. **Sbloccare le trenta analisi ferme.** Il ritentativo è stato corretto il
+   22 settembre 2026 (5.1): al primo deploy ripartono da sole, con le
+   avvertenze scritte lì (email su chiamate vecchie). Con `sidial_call_id` che
+   punta a `leadsRecs.id` si possono comunque ripescare e rifare.
 4. **Togliere il blocco del server durante l'analisi** (5.2): con un worker solo
    e il client sincrono, ogni analisi ferma tutta l'applicazione.
 5. **Rivedere il modello dell'analisi**, oggi Haiku 4.5.

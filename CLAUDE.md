@@ -102,9 +102,18 @@ errore_tecnico     (nero)   — trascrizione troppo breve/fallita
 - Le analisi duplicate per lo stesso appointment vengono gestite mostrando solo la piu recente (ORDER BY id DESC)
 - Sidial retry registrazioni in conversione: 6 tentativi ogni 10 minuti (valori scritti
   nel codice; le impostazioni `sidial_retry_count`/`sidial_retry_wait_seconds` sono lette
-  e mai usate). ATTENZIONE: al 07/09/2026 `retry_conversion_analysis` è ROTTA — usa nomi
-  non importati nel modulo e solleva NameError a ogni giro, quindi le analisi in
-  `pending_conversion` non ripartono mai. Dettaglio in CONTESTO_CALLCOACH.md §5.1.
+  e mai usate). `retry_conversion_analysis` è stata ROTTA fino al 22/09/2026: usava
+  cinque nomi mai importati nella funzione, il NameError veniva inghiottito dal suo
+  primo try/except e le analisi in `pending_conversion` non ripartivano mai. Corretta
+  il 22/09/2026 con gli import locali mancanti; storia, verifica e AVVERTENZE PER IL
+  PRIMO DEPLOY (le analisi ferme ripartono tutte e possono inviare email) in
+  CONTESTO_CALLCOACH.md §5.1.
+- REGOLA (da quell'incidente): in `routers/webhook.py` i nomi di DB e servizi
+  (`AsyncSessionLocal`, `Analysis`, `update_step`, `get_setting`, …) sono importati
+  DENTRO ogni funzione, non a livello di modulo. Ogni funzione nuova importa i suoi, e
+  prima di ogni commit `python3 -m pyflakes routers/webhook.py` deve dare zero
+  «undefined name» (le uniche righe attese sono le due variabili inutilizzate di
+  `retry_count`/`retry_wait`).
 - Il webhook analizza SOLO appuntamenti creati oggi e SOLO con etichetta PRESO
 - Registrazioni: da oggi si trovano sulla REPLICA MariaDB Sidial (non più cercando via API);
   il download del file resta su `a=getLeadRec`. Procedura completa in CONTESTO_CALLCOACH.md §3.

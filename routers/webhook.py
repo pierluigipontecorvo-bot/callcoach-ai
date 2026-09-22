@@ -52,6 +52,9 @@ from utils.helpers import parse_iso_datetime
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 logger = logging.getLogger(__name__)
 
+# Indirizzo aggiunto sempre in copia a ogni report inviato (pipeline e retry)
+_INOLTRO = "inoltro@effoncall.com"
+
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
@@ -822,7 +825,6 @@ async def _run_pipeline_inner(
 
     _email_disabled = bool(campaign_db and campaign_db.email_disabled)
     _email_no_operator = bool(campaign_db and campaign_db.email_no_operator)
-    _INOLTRO = "inoltro@effoncall.com"
 
     if _email_disabled:
         await update_step(analysis_id, 14, "ok", "Email disabilitata per questa campagna")
@@ -879,7 +881,10 @@ async def retry_conversion_analysis(analysis_id: int) -> bool:
     """
     from sqlalchemy.orm.attributes import flag_modified as _fm
     from sqlalchemy import select as _sa_select
-    from models import GlobalDocument
+    from database import AsyncSessionLocal
+    from models import Analysis, GlobalDocument
+    from services.pipeline import update_step
+    from services.settings_service import get_setting
 
     # Carica analisi
     try:
