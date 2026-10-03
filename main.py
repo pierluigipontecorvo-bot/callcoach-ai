@@ -122,6 +122,12 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE operators ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)",
         "operators.display_name",
     )
+    # La colonna 'name' del vecchio schema.sql è NOT NULL e il codice non la scrive:
+    # ogni auto-creazione di operatore falliva e l'anagrafica è rimasta vuota (03/10/2026).
+    await _run_sql(
+        "ALTER TABLE operators ALTER COLUMN name DROP NOT NULL",
+        "operators.name nullable",
+    )
     await _run_sql(
         "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0",
         "analyses.progress",
@@ -236,7 +242,13 @@ async def health():
         db_ok = True
     except Exception as exc:
         db_err = str(exc)
-    return {"status": "healthy" if db_ok else "degraded", "db": db_ok, "db_error": db_err}
+    import os
+    return {
+        "status": "healthy" if db_ok else "degraded",
+        "db": db_ok,
+        "db_error": db_err,
+        "commit": (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "")[:7],
+    }
 
 
 @app.exception_handler(Exception)

@@ -304,6 +304,11 @@ Come leggerli davvero:
   12 (analisi) e 13 (salvataggio). L'email che non parte è solo un avviso.
 - Quando un passo si ferma, **quelli dopo restano grigi per sempre**: grigio
   vuol dire tanto «non ancora fatto» quanto «non sarà mai fatto».
+- **Nessuna email per «non in target» ed «errore tecnico».** Il passo 14 si chiude
+  verde con «Nessuna email — qualifica: …» e non parte nemmeno la copia interna
+  (destinatari della campagna e inoltro). È così dal 21 marzo 2026: al 3 ottobre
+  le analisi non in target erano 84, nessuna inviata. Il report resta leggibile
+  nell'area admin.
 - Il webhook lavora **solo su appuntamenti creati oggi** e **solo sull'etichetta
   `PRESO`**. Un appuntamento di ieri che cambia etichetta non produce nulla.
 - Se il codice campagna non si riesce a leggere, o la campagna non è configurata,
@@ -438,6 +443,43 @@ motivazione scritta è imprecisa.
 Non esiste un sistema di migrazioni: lo schema si costruisce con una ventina di
 istruzioni eseguite a ogni avvio, tutte non fatali. `schema.sql` è fermo alla
 prima versione e **non descrive il database vero**: non usarlo per ricrearlo.
+
+### 5.6 L'indirizzo dell'operatore poteva essere quello del cliente (corretto il 3 ottobre 2026)
+
+Il passo 8 cerca nell'appuntamento un indirizzo `op.N.nome@effoncall.com`. Se non
+lo trovava, prendeva così com'era il campo email della prenotazione Acuity, che a
+volte contiene l'indirizzo del **cliente**. È successo il 2 ottobre 2026 (analisi
+652): l'indirizzo del cliente è stato registrato come indirizzo dell'operatrice, e
+il report non gli è arrivato solo perché l'esito era «non in target». Lo stesso
+accadeva quando nell'appuntamento mancava del tutto il numero dell'operatore.
+
+Il difetto collegato: l'anagrafica `operators` era **vuota**. La colonna `name` del
+vecchio `schema.sql` è NOT NULL e il codice non la scrive, quindi ogni
+auto-creazione falliva (nei log: «Auto-creazione operatore #N fallita …
+NotNullViolationError»). L'operatore si riconosceva solo da quello che c'era nella
+singola prenotazione.
+
+La correzione:
+
+- `company_operator_email` (in `services/operator_service.py`): un indirizzo vale
+  come destinatario solo se è `op.N.nome@effoncall.com` con lo stesso N
+  dell'operatore. Qualunque altro indirizzo diventa vuoto.
+- `identify_operator` restituisce e salva in anagrafica solo indirizzi di quel
+  tipo. Quando manca, il passo 8 diventa giallo con il motivo e il report va solo
+  ai destinatari della campagna e all'inoltro.
+- Il passo 14, anche nel ritentativo delle conversioni, ripete il controllo prima
+  di aggiungere l'operatore ai destinatari.
+- All'avvio: `ALTER TABLE operators ALTER COLUMN name DROP NOT NULL`.
+  L'anagrafica si riempie dalla prima analisi utile: un operatore che ha prenotato
+  almeno una volta col suo indirizzo aziendale riceve il report anche quando nella
+  prenotazione c'è l'email del cliente.
+- Gli indirizzi `op.N.…@gmail.com` servono ancora a riconoscere il numero, ma non
+  ricevono più il report.
+
+Controprova sul codice precedente: lo stesso collaudo manda il report al cliente. E
+riparare solo l'anagrafica, senza il filtro, sarebbe stato peggio: l'indirizzo del
+cliente sarebbe finito in anagrafica e tutti i report successivi di quell'operatrice
+sarebbero andati a lui.
 
 ---
 

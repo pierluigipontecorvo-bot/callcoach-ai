@@ -25,7 +25,7 @@ import time as _time_mod
 from urllib.parse import parse_qs
 
 # Versione pipeline — visibile nello step 1 per verificare deploy
-_PIPELINE_VERSION = "v2026-03-27b"
+_PIPELINE_VERSION = "v2026-10-03"
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -222,7 +222,7 @@ async def _run_pipeline_inner(
     engine_override: if provided, bypasses both global and campaign engine settings.
     """
     from services.pipeline import update_step, init_steps
-    from services.operator_service import identify_operator
+    from services.operator_service import identify_operator, company_operator_email
     from services.settings_service import get_setting
     from database import AsyncSessionLocal
     from models import Analysis
@@ -397,7 +397,7 @@ async def _run_pipeline_inner(
         logger.warning("[%s] identify_operator error (non-fatal): %s", appointment_id, _op_exc)
         op_info = {
             "number": None,
-            "email": email_field,
+            "email": company_operator_email(email_field),
             "display_name": None,
             "source": None,
             "warning": f"Errore lookup operatore: {_op_exc}",
@@ -843,8 +843,10 @@ async def _run_pipeline_inner(
         recipients = list(campaign_db.email_recipients)
     if not recipients:
         recipients = [cfg.fallback_email]
-    if operator_email and not _email_no_operator and operator_email not in recipients:
-        recipients.insert(0, operator_email)
+    # Al report «dell'operatore» va solo un indirizzo aziendale op.N.nome@effoncall.com
+    _op_dest = company_operator_email(operator_email)
+    if _op_dest and not _email_no_operator and _op_dest not in recipients:
+        recipients.insert(0, _op_dest)
     if _INOLTRO not in recipients:
         recipients.append(_INOLTRO)
 
@@ -885,6 +887,7 @@ async def retry_conversion_analysis(analysis_id: int) -> bool:
     from models import Analysis, GlobalDocument
     from services.pipeline import update_step
     from services.settings_service import get_setting
+    from services.operator_service import company_operator_email
 
     # Carica analisi
     try:
@@ -1115,8 +1118,9 @@ async def retry_conversion_analysis(analysis_id: int) -> bool:
     if _qlev not in ("non_in_target", "errore_tecnico") and _cdb and not _cdb.email_disabled:
         try:
             _recps = list(_cdb.email_recipients or [])
-            if _op_email and not _cdb.email_no_operator and _op_email not in _recps:
-                _recps.insert(0, _op_email)
+            _op_dest = company_operator_email(_op_email)
+            if _op_dest and not _cdb.email_no_operator and _op_dest not in _recps:
+                _recps.insert(0, _op_dest)
             if _INOLTRO not in _recps:
                 _recps.append(_INOLTRO)
             await send_analysis_report(
