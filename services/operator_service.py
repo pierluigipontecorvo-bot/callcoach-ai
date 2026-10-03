@@ -44,6 +44,36 @@ def company_operator_email(email: str | None, number: str | None = None) -> str:
     return e
 
 
+def report_recipients(
+    campaign_recipients: list[str] | None,
+    operator_email: str | None,
+    qualification_level: str | None,
+    *,
+    email_no_operator: bool = False,
+    fallback: str | None = None,
+    inoltro: str = "",
+) -> list[str]:
+    """
+    Destinatari del report, in un posto solo (pipeline e ritentativo).
+
+    - Copia interna SEMPRE: destinatari della campagna (o `fallback`, se dato e la
+      campagna non ne ha) più l'inoltro. Vale anche per i prospect non in target:
+      Pierluigi vuole ricevere ogni report (03/10/2026).
+    - L'operatore solo se il prospect è in target, se la campagna non lo esclude e
+      se l'indirizzo è quello aziendale (company_operator_email).
+    """
+    recipients = [r.strip() for r in (campaign_recipients or []) if r and r.strip()]
+    if not recipients and fallback:
+        recipients = [fallback]
+    if qualification_level != "non_in_target" and not email_no_operator:
+        op = company_operator_email(operator_email)
+        if op and op not in recipients:
+            recipients.insert(0, op)
+    if inoltro and inoltro not in recipients:
+        recipients.append(inoltro)
+    return recipients
+
+
 def _missing_email_warning(number: str, display_name: str | None) -> str:
     chi = f"Operatore #{number}" + (f" — {display_name}" if display_name else "")
     return (

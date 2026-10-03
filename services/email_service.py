@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _LEVEL_EMOJI = {
     "inaccurata": "❌", "da_migliorare": "⚠️", "buona": "✅",
     "eccellente": "⭐", "sufficiente": "✅", "corretta": "✅", "insufficiente": "❌",
+    "non_in_target": "❌",
 }
 
 _FROM_ADDRESS = settings.email_from_address

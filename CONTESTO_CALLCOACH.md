@@ -304,11 +304,11 @@ Come leggerli davvero:
   12 (analisi) e 13 (salvataggio). L'email che non parte è solo un avviso.
 - Quando un passo si ferma, **quelli dopo restano grigi per sempre**: grigio
   vuol dire tanto «non ancora fatto» quanto «non sarà mai fatto».
-- **Nessuna email per «non in target» ed «errore tecnico».** Il passo 14 si chiude
-  verde con «Nessuna email — qualifica: …» e non parte nemmeno la copia interna
-  (destinatari della campagna e inoltro). È così dal 21 marzo 2026: al 3 ottobre
-  le analisi non in target erano 84, nessuna inviata. Il report resta leggibile
-  nell'area admin.
+- **I report «non in target» vanno alla copia interna.** Dal 3 ottobre 2026 partono
+  verso i destinatari della campagna e l'inoltro, con la x rossa nell'oggetto, ma
+  non all'operatore. Dal 17 marzo al 3 ottobre erano esclusi da ogni invio
+  automatico (85 analisi), una scelta mai decisa da Pierluigi: lui vuole ricevere
+  ogni report. Per «errore tecnico» non parte niente, perché il report non c'è.
 - Il webhook lavora **solo su appuntamenti creati oggi** e **solo sull'etichetta
   `PRESO`**. Un appuntamento di ieri che cambia etichetta non produce nulla.
 - Se il codice campagna non si riesce a leggere, o la campagna non è configurata,

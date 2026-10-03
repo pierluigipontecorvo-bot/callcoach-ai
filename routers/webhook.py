@@ -222,7 +222,7 @@ async def _run_pipeline_inner(
     engine_override: if provided, bypasses both global and campaign engine settings.
     """
     from services.pipeline import update_step, init_steps
-    from services.operator_service import identify_operator, company_operator_email
+    from services.operator_service import identify_operator, company_operator_email, report_recipients
     from services.settings_service import get_setting
     from database import AsyncSessionLocal
     from models import Analysis
@@ -834,21 +834,24 @@ async def _run_pipeline_inner(
         await update_step(analysis_id, 14, "ok", "Email già inviata in precedenza — skip rianalisi")
         return
 
-    if qualification_level in ("non_in_target", "errore_tecnico"):
-        await update_step(analysis_id, 14, "ok", f"Nessuna email — qualifica: {qualification_level}")
+    # Per errore_tecnico non c'è un report da mandare. Per i non in target parte la
+    # copia interna, senza l'operatore (report_recipients).
+    if qualification_level == "errore_tecnico":
+        await update_step(analysis_id, 14, "ok", "Nessuna email — errore tecnico")
         return
 
-    recipients: list[str] = []
-    if campaign_db and campaign_db.email_recipients:
-        recipients = list(campaign_db.email_recipients)
-    if not recipients:
-        recipients = [cfg.fallback_email]
-    # Al report «dell'operatore» va solo un indirizzo aziendale op.N.nome@effoncall.com
-    _op_dest = company_operator_email(operator_email)
-    if _op_dest and not _email_no_operator and _op_dest not in recipients:
-        recipients.insert(0, _op_dest)
-    if _INOLTRO not in recipients:
-        recipients.append(_INOLTRO)
+    recipients = report_recipients(
+        campaign_db.email_recipients if campaign_db else None,
+        operator_email,
+        qualification_level,
+        email_no_operator=_email_no_operator,
+        fallback=cfg.fallback_email,
+        inoltro=_INOLTRO,
+    )
+    _sent_label = (
+        "Non in target — copia interna inviata a"
+        if qualification_level == "non_in_target" else "Email inviata a"
+    )
 
     try:
         await send_analysis_report(
@@ -864,7 +867,7 @@ async def _run_pipeline_inner(
                 _a = await _sess.get(Analysis, analysis_id)
                 if _a:
                     _a.email_sent = True
-        await update_step(analysis_id, 14, "ok", f"Email inviata a: {', '.join(recipients)}")
+        await update_step(analysis_id, 14, "ok", f"{_sent_label}: {', '.join(recipients)}")
         logger.info("[%s] Email inviata a %s", appointment_id, recipients)
     except Exception as exc:
         logger.error("[%s] Email send failed: %s", appointment_id, exc, exc_info=True)
@@ -887,7 +890,7 @@ async def retry_conversion_analysis(analysis_id: int) -> bool:
     from models import Analysis, GlobalDocument
     from services.pipeline import update_step
     from services.settings_service import get_setting
-    from services.operator_service import company_operator_email
+    from services.operator_service import report_recipients
 
     # Carica analisi
     try:
@@ -1115,14 +1118,12 @@ async def retry_conversion_analysis(analysis_id: int) -> bool:
 
     # Step 14: Email
     await update_step(analysis_id, 14, "running", "Invio email...")
-    if _qlev not in ("non_in_target", "errore_tecnico") and _cdb and not _cdb.email_disabled:
+    if _qlev != "errore_tecnico" and _cdb and not _cdb.email_disabled:
         try:
-            _recps = list(_cdb.email_recipients or [])
-            _op_dest = company_operator_email(_op_email)
-            if _op_dest and not _cdb.email_no_operator and _op_dest not in _recps:
-                _recps.insert(0, _op_dest)
-            if _INOLTRO not in _recps:
-                _recps.append(_INOLTRO)
+            _recps = report_recipients(
+                _cdb.email_recipients, _op_email, _qlev,
+                email_no_operator=bool(_cdb.email_no_operator), inoltro=_INOLTRO,
+            )
             await send_analysis_report(
                 recipients=_recps, html_content=_html or "",
                 operator_name=_op, qualification_level=_qlev,
