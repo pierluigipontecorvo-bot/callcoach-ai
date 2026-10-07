@@ -54,15 +54,21 @@ def _basic_auth_header(user_id: str, api_key: str) -> str:
 
 def verify_acuity_webhook(payload: bytes, signature: str, secret: str) -> bool:
     """
-    Verify the X-Acuity-Signature HMAC-SHA256 header.
-    Returns True if valid; False otherwise.
+    Verify the X-Acuity-Signature header.
+
+    Acuity firma ogni POST con base64(HMAC-SHA256(body grezzo, API key
+    dell'account)): non esiste un segreto webhook separato. Come nel
+    gestionale (lib/acuity-webhook-signature.ts) si accetta anche la forma
+    esadecimale della stessa MAC. Firma o chiave assenti → False.
     """
-    expected = hmac.new(
-        secret.encode(),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    if not signature or not secret:
+        return False
+    mac = hmac.new(secret.encode(), payload, hashlib.sha256).digest()
+    received = signature.strip()
+    for expected in (base64.b64encode(mac).decode(), mac.hex()):
+        if hmac.compare_digest(expected, received):
+            return True
+    return False
 
 
 def check_webhook_signature(
@@ -72,20 +78,23 @@ def check_webhook_signature(
 ) -> bool:
     """
     Validate the webhook signature for the given Acuity account.
-    If ACUITY_VERIFY_WEBHOOK is False or no secret is configured, always returns True.
+    If ACUITY_VERIFY_WEBHOOK is False always returns True. With verification on,
+    the key is the webhook secret if set, otherwise the account API key (the key
+    Acuity actually signs with); with no key at all the request is rejected.
     """
     if not settings.acuity_verify_webhook:
         return True
 
-    _, _, secret = _get_credentials(account_id)
-    if not secret:
-        logger.warning(
-            "ACUITY_VERIFY_WEBHOOK=true but no secret configured for account %d — skipping",
+    _, api_key, secret = _get_credentials(account_id)
+    key = secret or api_key
+    if not key:
+        logger.error(
+            "ACUITY_VERIFY_WEBHOOK=true but no key configured for account %d — rejecting",
             account_id,
         )
-        return True
+        return False
 
-    result = verify_acuity_webhook(payload, signature, secret)
+    result = verify_acuity_webhook(payload, signature, key)
     if not result:
         logger.warning(
             "Invalid Acuity webhook signature for account %d", account_id
